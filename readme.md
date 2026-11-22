@@ -225,6 +225,31 @@ Lệnh gọi STS, embedding, Converse và Rerank với câu mẫu ngắn và bá
 
 Kết quả `/api/query` gồm `answer`, `primary` (mục chính xác: `path`, `content` nguyên văn, `quote`, `quote_verified`) và `sources` (các mục sau rerank kèm điểm vector / keyword / RRF / rerank).
 
+## Xử lý sự cố
+
+### `ModuleNotFoundError: No module named 'app'`
+Package `app` nằm trong `backend/`. Chạy `uvicorn` từ thư mục `backend`:
+```powershell
+cd backend; uvicorn app.main:app --reload
+```
+
+### `ImportError: no pq wrapper available … An Application Control policy has blocked this file`
+Windows (Smart App Control / Application Control) chặn các DLL chưa ký của `psycopg-binary` (`libpq`, `libssl`, `libcrypto`). Không sửa được bằng code – chạy backend trong Docker:
+```powershell
+docker compose --profile full up -d --build
+```
+API: http://localhost:8000/docs. Khi sửa code backend, build lại bằng lệnh trên.
+
+### Container gọi Bedrock bị `ReadTimeoutError`
+Triệu chứng: request nhỏ thì được, payload vài KB trở lên treo. Nguyên nhân là MTU: đường mạng thực tế nhỏ hơn 1500 nhưng NAT của Docker/WSL không tự dò được, gói lớn bị rớt. `docker-compose.yml` đặt MTU mạng Docker = 1400 (đổi bằng biến `DOCKER_MTU` trong `.env`, ví dụ 1300 nếu vẫn lỗi). Sau khi đổi:
+```powershell
+docker compose --profile full down; docker compose --profile full up -d
+```
+Kiểm tra từ trong container:
+```powershell
+docker compose --profile full exec backend python -m app.cli check-aws
+```
+
 ## PDF scan (ví dụ `data/TT_HCM.pdf`)
 File scan không có lớp text nên cần OCR. Cài thêm `pip install rapidocr onnxruntime` (hoặc Tesseract kèm gói ngôn ngữ `vie`) rồi bật `ENABLE_OCR=true`. Nếu không có OCR, tài liệu sẽ báo lỗi rõ ràng thay vì nạp nội dung rỗng. Với văn bản tiếng Việt có dấu, Tesseract `vie` thường cho kết quả tốt hơn.
 

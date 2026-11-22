@@ -30,10 +30,16 @@ def _chunk_rows(doc_id: uuid.UUID) -> list[dict]:
         ).fetchall()
 
 
+def _to_array(value) -> np.ndarray:
+    if hasattr(value, "to_numpy"):
+        value = value.to_numpy()
+    return np.asarray(value, dtype=np.float32)
+
+
 def check_vectors(rows: list[dict]) -> list[Check]:
     s = get_settings()
     expected_model = f"{s.llm_provider}:{s.active_embedding_model}:{s.embedding_dim}"
-    vecs = [np.asarray(r["embedding"], dtype=np.float32) for r in rows]
+    vecs = [_to_array(r["embedding"]) for r in rows]
     dims = {v.shape[0] for v in vecs}
     bad = [i for i, v in enumerate(vecs) if not np.all(np.isfinite(v))]
     zero = [i for i, v in enumerate(vecs) if float(np.linalg.norm(v)) < 1e-6]
