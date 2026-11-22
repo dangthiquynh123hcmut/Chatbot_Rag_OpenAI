@@ -1,0 +1,54 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ClaudeHaikuViaAuInferenceProfile",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:ap-southeast-2:*:inference-profile/au.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+      ]
+    },
+    {
+      "Sid": "EvalJudgeClaudeSonnetViaAuInferenceProfile",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:aws:bedrock:ap-southeast-2:*:inference-profile/au.anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-sonnet-5"
+      ]
+    },
+    {
+      "Sid": "TitanTextEmbeddingsV2",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.titan-embed-text-v2:0"
+    },
+    {
+      "Sid": "RerankApi",
+      "Effect": "Allow",
+      "Action": "bedrock:Rerank",
+      "Resource": "*"
+    },
+    {
+      "Sid": "CohereRerankModel",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:ap-northeast-1::foundation-model/cohere.rerank-v3-5:0"
+    },
+    {
+      "Sid": "DiscoverModels",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListFoundationModels",
+        "bedrock:GetFoundationModel",
+        "bedrock:ListInferenceProfiles",
+        "bedrock:GetInferenceProfile"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

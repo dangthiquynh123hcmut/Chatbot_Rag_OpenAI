@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MarketplaceSubscriptionForThirdPartyModels",
+      "Effect": "Allow",
+      "Action": ["aws-marketplace:Subscribe", "aws-marketplace:ViewSubscriptions"],
+      "Resource": "*"
+    }
+  ]
+}
