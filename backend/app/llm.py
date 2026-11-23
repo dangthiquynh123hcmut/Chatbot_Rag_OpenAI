@@ -14,7 +14,7 @@ from .config import get_settings
 
 log = logging.getLogger(__name__)
 
-JSON_ONLY_SUFFIX = "\n\nChỉ trả về đúng một đối tượng JSON hợp lệ, không kèm giải thích hay markdown."
+JSON_ONLY_SUFFIX = "\n\nReturn exactly one valid JSON object, with no explanation or markdown."
 NETWORK_BACKOFF_S = (2, 4, 8, 16, 30)
 TRANSIENT_ERRORS = {
     "EndpointConnectionError",

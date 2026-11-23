@@ -50,12 +50,16 @@ class Settings(BaseSettings):
     upload_dir: Path = BACKEND_DIR / "storage" / "uploads"
     markdown_dir: Path = BACKEND_DIR / "storage" / "markdown"
     enable_ocr: bool = True
-    ocr_language: str = "vie+eng"
+    ocr_language: str = "eng"
 
     cors_origins: str = "http://localhost:5173"
 
+    app_env: str = "development"
     jwt_secret: str = ""
-    jwt_expire_minutes: int = 720
+    jwt_expire_minutes: int = 15
+    refresh_token_days: int = 14
+    refresh_reuse_grace_seconds: int = 30
+    cookie_secure: bool = False
     allow_registration: bool = True
     min_password_length: int = 8
 
@@ -65,6 +69,9 @@ class Settings(BaseSettings):
     def _check(self) -> "Settings":
         self.llm_provider = self.llm_provider.strip().lower()
         self.reranker = self.reranker.strip().lower()
+        self.app_env = self.app_env.strip().lower()
+        if not self.is_development and len(self.jwt_secret) < 32:
+            raise ValueError("JWT_SECRET (tối thiểu 32 ký tự) là bắt buộc khi APP_ENV khác 'development'")
         if self.llm_provider not in {"openai", "bedrock"}:
             raise ValueError("LLM_PROVIDER phải là 'openai' hoặc 'bedrock'")
         if self.reranker not in {"llm", "bedrock", "cross_encoder", "none"}:
@@ -76,6 +83,10 @@ class Settings(BaseSettings):
         ):
             raise ValueError("Titan Text Embeddings V2 chỉ hỗ trợ EMBEDDING_DIM = 256, 512 hoặc 1024")
         return self
+
+    @property
+    def is_development(self) -> bool:
+        return self.app_env in {"development", "dev", "local", "test"}
 
     @property
     def active_llm_model(self) -> str:

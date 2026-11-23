@@ -2,44 +2,30 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
 
 ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
-ORDINAL_WORDS = {
-    "nhất": 1, "một": 1, "hai": 2, "ba": 3, "bốn": 4, "tư": 4, "năm": 5,
-    "sáu": 6, "bảy": 7, "tám": 8, "chín": 9, "mười": 10,
-}
-LATIN_LETTERS = "abcdefghijklmnopqrstuvwxyz"
-VIET_LETTERS = "abcdđeghiklmnopqrstuvxy"
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
 SEP = r"[\s.:\-–—]*"
-NUM_TOKEN = r"(thứ\s+[^\s.:\-–—]+|[IVXLCDM]+|\d+)"
+NUM_TOKEN = r"([IVXLCDM]+|\d+)"
 
 STRUCT_PATTERNS = [
-    ("part", 10, re.compile(rf"^(?:phần|part)\s+{NUM_TOKEN}(?![\w])({SEP})(.*)$", re.IGNORECASE)),
-    ("chapter", 20, re.compile(rf"^(?:chương|chapter)\s+([IVXLCDM]+|\d+)(?![\w])({SEP})(.*)$", re.IGNORECASE)),
-    ("subsection", 40, re.compile(rf"^(?:tiểu\s+mục)\s+([IVXLCDM]+|\d+)(?![\w])({SEP})(.*)$", re.IGNORECASE)),
-    ("section", 30, re.compile(rf"^(?:mục|section)\s+([IVXLCDM]+|\d+)(?![\w])({SEP})(.*)$", re.IGNORECASE)),
+    ("part", 10, re.compile(rf"^part\s+{NUM_TOKEN}(?![\w])({SEP})(.*)$", re.IGNORECASE)),
+    ("chapter", 20, re.compile(rf"^chapter\s+{NUM_TOKEN}(?![\w])({SEP})(.*)$", re.IGNORECASE)),
+    ("subsection", 40, re.compile(rf"^subsection\s+{NUM_TOKEN}(?![\w])({SEP})(.*)$", re.IGNORECASE)),
+    ("section", 30, re.compile(rf"^section\s+{NUM_TOKEN}(?![\w])({SEP})(.*)$", re.IGNORECASE)),
 ]
-ARTICLE_RE = re.compile(r"^(?:điều|article)\s+(\d+[a-zđ]?)\s*([.:])?\s*(.*)$", re.IGNORECASE)
+ARTICLE_RE = re.compile(r"^article\s+(\d+[a-z]?)\s*([.:])?\s*(.*)$", re.IGNORECASE)
 ROMAN_RE = re.compile(r"^([IVXLCDM]+)\s*[.)]\s+(\S.*)$")
 DECIMAL_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3})+)\.?\s+(\S.*)$")
 NUMBER_RE = re.compile(r"^(\d{1,3})\s*[.)]\s+(\S.*)$")
 MARKED_NUMBER_RE = re.compile(r"^(\d{1,3})\s+([^\d\s].{0,200})$")
-POINT_RE = re.compile(r"^([a-zđ])\s*\)\s+(\S.*)$")
+POINT_RE = re.compile(r"^([a-z])\s*\)\s+(\S.*)$")
 MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 KIND_LABELS = {
-    "part": "Phần",
-    "chapter": "Chương",
-    "section": "Mục",
-    "subsection": "Tiểu mục",
-    "article": "Điều",
-    "clause": "Khoản",
-    "point": "Điểm",
-}
-EN_LABELS = {
     "part": "Part",
     "chapter": "Chapter",
     "section": "Section",
@@ -50,6 +36,7 @@ EN_LABELS = {
 }
 INLINE_KINDS = {"clause", "point"}
 MD_RANKS = {1: 15, 2: 25, 3: 35, 4: 47, 5: 57, 6: 67}
+PREAMBLE = "Preamble"
 
 
 def nfc(s: str) -> str:
@@ -71,12 +58,9 @@ def roman_to_int(s: str) -> int | None:
 def normalize_number(raw: str) -> str:
     raw = raw.strip().strip(".:)").strip()
     low = raw.lower()
-    if low.startswith("thứ"):
-        word = low.split(None, 1)[1] if " " in low else ""
-        return str(ORDINAL_WORDS.get(word, word))
     if raw.isdigit():
         return str(int(raw))
-    if re.fullmatch(r"\d+[a-zđ]", low):
+    if re.fullmatch(r"\d+[a-z]", low):
         return str(int(low[:-1])) + low[-1]
     if re.fullmatch(r"[IVXLCDM]+", raw.upper()) and len(raw) > 0 and raw.upper() == raw:
         v = roman_to_int(raw)
@@ -88,7 +72,7 @@ def normalize_number(raw: str) -> str:
 
 
 def number_value(num: str) -> float:
-    m = re.match(r"(\d+)([a-zđ]?)", num)
+    m = re.match(r"(\d+)([a-z]?)", num)
     if not m:
         return -1
     return int(m.group(1)) + (0.5 if m.group(2) else 0)
@@ -150,7 +134,7 @@ class Node:
 
     def display(self) -> str:
         if self.kind == "document":
-            return self.title or "Tài liệu"
+            return self.title or "Document"
         if self.kind in INLINE_KINDS or not self.title:
             return self.label
         short = self.title if len(self.title) <= 90 else self.title[:87].rstrip() + "…"
@@ -202,11 +186,6 @@ def render_heading(node: Node, level: int) -> str:
     return "#" * max(1, min(level, 6)) + " " + node.heading
 
 
-def label_for(kind: str, text: str) -> str:
-    keyword = text.split(None, 1)[0] if text else ""
-    return EN_LABELS[kind] if keyword.isascii() else KIND_LABELS[kind]
-
-
 def match_structural(text: str, marked: bool) -> Candidate | None:
     cand = _match_structural(text, marked)
     if cand is not None:
@@ -222,24 +201,21 @@ def _match_structural(text: str, marked: bool) -> Candidate | None:
         if not m:
             continue
         raw, sep, rest = m.group(1), m.group(2), m.group(3).strip()
-        if raw.upper() == raw or raw.isdigit() or raw.lower().startswith("thứ"):
-            pass
-        else:
+        if not (raw.isdigit() or raw.upper() == raw):
             continue
         sep_has_punct = bool(re.search(r"[.:\-–—]", sep))
         if rest and not (sep_has_punct or marked or rest.upper() == rest):
             continue
         if len(rest) > 250:
             continue
-        label = label_for(kind, text)
-        num_display = raw if not raw.lower().startswith("thứ") else raw.lower()
-        heading = f"{label} {num_display}" + (f". {rest}" if rest else "")
+        label = KIND_LABELS[kind]
+        heading = f"{label} {raw}" + (f". {rest}" if rest else "")
         return Candidate(kind, rank, raw, normalize_number(raw), rest, heading, label_word=label)
     m = ARTICLE_RE.match(text)
     if m:
         raw, punct, rest = m.group(1), m.group(2), m.group(3).strip()
         if punct or marked or not rest:
-            label = label_for("article", text)
+            label = KIND_LABELS["article"]
             heading = f"{label} {raw}." + (f" {rest}" if rest else "")
             return Candidate("article", 50, raw, normalize_number(raw), rest, heading, label_word=label)
         return None
@@ -266,11 +242,8 @@ def _match_structural(text: str, marked: bool) -> Candidate | None:
 
 def is_successor(kind: str, prev: str, cur: str) -> bool:
     if kind == "point":
-        for alpha in (LATIN_LETTERS, VIET_LETTERS):
-            i = alpha.find(prev)
-            if 0 <= i < len(alpha) - 1 and alpha[i + 1] == cur:
-                return True
-        return False
+        i = LETTERS.find(prev)
+        return 0 <= i < len(LETTERS) - 1 and LETTERS[i + 1] == cur
     try:
         return int(cur.split(".")[-1]) == int(prev.split(".")[-1]) + 1
     except ValueError:
@@ -371,21 +344,19 @@ class HierarchyParser:
         kind = cand.kind
         label = cand.label_word or KIND_LABELS.get(kind, "")
         article = self._article_ancestor(parent)
-        inline_labels = EN_LABELS if article is not None and article.label.startswith("Article") else KIND_LABELS
         if kind == "num":
             if cand.depth_hint == 1 and article is not None:
-                kind, label = "clause", inline_labels["clause"] + f" {cand.number}"
+                kind, label = "clause", KIND_LABELS["clause"] + f" {cand.number}"
             else:
                 label = cand.raw_number.rstrip(".")
         elif kind == "point":
-            label = (inline_labels["point"] + f" {cand.number}") if article is not None else f"{cand.number})"
+            label = (KIND_LABELS["point"] + f" {cand.number}") if article is not None else f"{cand.number})"
         elif kind == "roman":
             label = cand.raw_number
         elif kind == "md":
             label = cand.title
         else:
-            disp = cand.raw_number.lower() if cand.raw_number.lower().startswith("thứ") else cand.raw_number
-            label = f"{label} {disp}"
+            label = f"{label} {cand.raw_number}"
         self.order += 1
         node = Node(
             kind=kind,
@@ -574,5 +545,5 @@ def build_chunks(root: Node, max_chars: int = 2000, overlap: int = 1) -> list[Ch
 
 
 def embedding_text(doc_title: str, node: Node, content: str) -> str:
-    path = " > ".join(node.path) if node.kind != "document" else "Phần mở đầu"
-    return f"Tài liệu: {doc_title}\nVị trí: {path}\n\n{content}"
+    path = " > ".join(node.path) if node.kind != "document" else PREAMBLE
+    return f"Document: {doc_title}\nLocation: {path}\n\n{content}"

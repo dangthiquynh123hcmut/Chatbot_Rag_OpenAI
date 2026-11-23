@@ -13,6 +13,8 @@ from .references import STRONG_KEYS, ref_variants
 SECTION_COLS = """s.id AS section_id, s.document_id, d.title AS document_title, d.filename AS document_filename,
                   s.path, s.heading, s.full_md, s.depth, s.kind, s.refs"""
 JOINS = "FROM chunks c JOIN sections s ON s.id = c.section_id JOIN documents d ON d.id = c.document_id"
+# Must match the config of the generated chunks.tsv column (migration 0002).
+TS_CONFIG = "english"
 
 
 def _candidate(r: dict, match_type: str, chunk: bool) -> Candidate:
@@ -87,8 +89,8 @@ class DbBackend:
         with connection() as conn:
             rows = conn.execute(
                 f"""SELECT c.id AS chunk_id, c.content, {SECTION_COLS},
-                           ts_rank_cd(c.tsv, to_tsquery('simple', %(tsq)s)) AS score
-                    {JOINS} WHERE d.status = 'ready' {doc_filter} AND c.tsv @@ to_tsquery('simple', %(tsq)s)
+                           ts_rank_cd(c.tsv, to_tsquery('{TS_CONFIG}', %(tsq)s)) AS score
+                    {JOINS} WHERE d.status = 'ready' {doc_filter} AND c.tsv @@ to_tsquery('{TS_CONFIG}', %(tsq)s)
                     ORDER BY score DESC LIMIT %(k)s""",
                 {"tsq": " | ".join(terms), "docs": document_ids, "k": k},
             ).fetchall()

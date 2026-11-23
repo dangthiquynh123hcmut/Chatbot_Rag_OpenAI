@@ -23,13 +23,13 @@ CONTAINS = {"exact", "ancestor"}
 EXACT = {"exact"}
 CITATION_KEYS = ("chapter", "section", "article", "clause", "point")
 
-JUDGE_SYSTEM = """Bạn là giám khảo đánh giá câu trả lời của hệ thống tra cứu tài liệu.
-Cho câu hỏi, các NGUỒN hệ thống đã dùng, câu trả lời của hệ thống và đáp án tham chiếu (nếu có).
-Chấm:
-- "faithfulness": số thực 0..1 = tỷ lệ ý trong câu trả lời được NGUỒN hỗ trợ trực tiếp (1 = hoàn toàn bám nguồn).
-- "correctness": "correct" | "partial" | "incorrect" so với đáp án tham chiếu (nếu không có đáp án, so với nguồn chứa câu trả lời).
-- "reason": một câu giải thích ngắn.
-Trả về JSON: {"faithfulness": 0.0, "correctness": "correct", "reason": "..."}"""
+JUDGE_SYSTEM = """You are a judge evaluating answers from a document lookup system.
+Given the question, the SOURCES the system used, the system's answer and the reference answer (if any).
+Score:
+- "faithfulness": a float 0..1 = the fraction of claims in the answer directly supported by the SOURCES (1 = fully grounded).
+- "correctness": "correct" | "partial" | "incorrect" against the reference answer (if there is none, against the source containing the answer).
+- "reason": one short sentence of explanation.
+Return JSON: {"faithfulness": 0.0, "correctness": "correct", "reason": "..."}"""
 
 
 def _ranked(cands: list[Candidate]) -> list[tuple[str, list[str]]]:
@@ -106,9 +106,9 @@ def _judge(item: EvalItem, result: dict) -> dict:
     if result.get("primary"):
         sources.append(result["primary"]["content"])
     sources += [s["content"] for s in result.get("sources", [])[:3]]
-    ctx = "\n\n-----\n\n".join(x[:3000] for x in sources) or "(không có nguồn)"
-    user = (f"Câu hỏi: {item.question}\n\nĐáp án tham chiếu: {item.reference_answer or item.gold_quote or '(không có)'}\n\n"
-            f"Câu trả lời của hệ thống: {result.get('answer')}\n\nNGUỒN:\n{ctx}")
+    ctx = "\n\n-----\n\n".join(x[:3000] for x in sources) or "(no sources)"
+    user = (f"Question: {item.question}\n\nReference answer: {item.reference_answer or item.gold_quote or '(none)'}\n\n"
+            f"System answer: {result.get('answer')}\n\nSOURCES:\n{ctx}")
     try:
         data = json.loads(judge_chat_json(JUDGE_SYSTEM, user))
         return {"faithfulness": float(data.get("faithfulness", 0.0)),

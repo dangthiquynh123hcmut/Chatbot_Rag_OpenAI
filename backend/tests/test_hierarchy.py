@@ -3,68 +3,68 @@ from app.hierarchy import build_chunks, parse_markdown, tree_to_markdown
 from app.references import parse_references
 
 LEGAL = """
-LUẬT AN TOÀN THÔNG TIN MẠNG
+NETWORK INFORMATION SECURITY ACT
 
-Căn cứ Hiến pháp nước Cộng hòa xã hội chủ nghĩa Việt Nam;
+Pursuant to the Constitution;
 
-CHƯƠNG I
-NHỮNG QUY ĐỊNH CHUNG
+CHAPTER I
+GENERAL PROVISIONS
 
-Điều 1. Phạm vi điều chỉnh
-Luật này quy định về hoạt động an toàn thông tin mạng, quyền, trách nhiệm của cơ quan,
-tổ chức, cá nhân trong việc bảo đảm an toàn thông tin mạng.
+Article 1. Scope
+This Act governs network information security activities and the rights and duties of agencies,
+organizations and individuals in ensuring network information security.
 
-Điều 2. Đối tượng áp dụng
-1. Cơ quan, tổ chức, cá nhân Việt Nam.
-2. Tổ chức, cá nhân nước ngoài trực tiếp tham gia, theo quy định tại
-Điều 5 của Luật này.
+Article 2. Subjects of application
+1. Domestic agencies, organizations and individuals.
+2. Foreign organizations and individuals directly involved, as provided in
+Article 5 of this Act.
 
-Chương II
-BẢO ĐẢM AN TOÀN THÔNG TIN MẠNG
+Chapter II
+ENSURING NETWORK INFORMATION SECURITY
 
-Mục 1
-BẢO VỆ THÔNG TIN MẠNG
+Section 1
+PROTECTING NETWORK INFORMATION
 
-Điều 3. Nguyên tắc
-1. Bảo đảm an toàn thông tin là trách nhiệm của mọi cơ quan.
-2. Hoạt động an toàn thông tin phải thực hiện theo các yêu cầu sau:
-a) Đúng quy định pháp luật;
-b) Bảo đảm lợi ích quốc gia;
-c) Không xâm phạm quyền riêng tư.
-3. Các trường hợp khác theo quy định của Chính phủ.
+Article 3. Principles
+1. Ensuring information security is the duty of every agency.
+2. Information security activities must meet the following requirements:
+a) Comply with the law;
+b) Protect national interests;
+c) Not infringe on privacy.
+3. Other cases as prescribed by the Government.
 
-Mục 2
-PHÒNG, CHỐNG PHẦN MỀM ĐỘC HẠI
+Section 2
+PREVENTING MALWARE
 
-Điều 4. Trách nhiệm phòng chống
-1. Doanh nghiệp phải có biện pháp phòng chống phần mềm độc hại.
-2. Người dùng phải cập nhật phần mềm.
+Article 4. Responsibility for prevention
+1. Enterprises must have measures to prevent malware.
+2. Users must keep their software updated.
 """
 
 TEXTBOOK = """
-## Chương 1. KHÁI NIỆM VÀ ĐỐI TƯỢNG
+## Chapter 1. CONCEPTS AND SUBJECT
 
-I. KHÁI NIỆM TƯ TƯỞNG
+I. THE CONCEPT OF THOUGHT
 
-1. Định nghĩa
-Tư tưởng là hệ thống quan điểm.
+1. Definition
+Thought is a system of views.
 
-1.1. Nguồn gốc
-Hình thành từ thực tiễn.
-Các bước:
-1. Thu thập
-2. Phân tích
+1.1. Origins
+Formed from practice.
+Steps:
+1. Collect
+2. Analyze
 
-1.2. Ý nghĩa
-Có ý nghĩa to lớn.
+1.2. Significance
+It is highly significant.
 
-2. Đối tượng nghiên cứu
-Là hệ thống quan điểm toàn diện.
+2. Subject of study
+A comprehensive system of views.
 
-II. PHƯƠNG PHÁP
+II. METHODS
 
-1. Phương pháp luận
-C. Mác và Ph. Ăngghen đã chỉ ra.
+1. Methodology
+C. Marx and F. Engels pointed out.
 """
 
 
@@ -76,35 +76,35 @@ def _find(root, path_suffix):
 
 
 def test_legal_tree():
-    root = parse_markdown(normalize_markdown(LEGAL), "Luật ATTT")
-    art2 = _find(root, "Điều 2. Đối tượng áp dụng")
+    root = parse_markdown(normalize_markdown(LEGAL), "Network Security Act")
+    art2 = _find(root, "Article 2. Subjects of application")
     assert art2 is not None
-    assert [c.label for c in art2.children] == ["Khoản 1", "Khoản 2"]
-    assert "Điều 5 của Luật này" in art2.children[1].full_markdown()
-    art3 = _find(root, "Điều 3. Nguyên tắc")
+    assert [c.label for c in art2.children] == ["Paragraph 1", "Paragraph 2"]
+    assert "Article 5 of this Act" in art2.children[1].full_markdown()
+    art3 = _find(root, "Article 3. Principles")
     assert art3.refs == {"chapter": "2", "section": "1", "article": "3"}
     k2 = art3.children[1]
-    assert [c.label for c in k2.children] == ["Điểm a", "Điểm b", "Điểm c"]
+    assert [c.label for c in k2.children] == ["Point a", "Point b", "Point c"]
     assert k2.children[1].refs == {"chapter": "2", "section": "1", "article": "3", "clause": "2", "point": "b"}
-    assert art3.children[2].label == "Khoản 3"
-    assert art3.path[:2] == ["Chương II. BẢO ĐẢM AN TOÀN THÔNG TIN MẠNG", "Mục 1. BẢO VỆ THÔNG TIN MẠNG"]
-    assert "Căn cứ Hiến pháp" in root.own_text
+    assert art3.children[2].label == "Paragraph 3"
+    assert art3.path[:2] == ["Chapter II. ENSURING NETWORK INFORMATION SECURITY", "Section 1. PROTECTING NETWORK INFORMATION"]
+    assert "Pursuant to the Constitution" in root.own_text
 
 
 def test_textbook_tree():
-    root = parse_markdown(normalize_markdown(TEXTBOOK), "Giáo trình")
+    root = parse_markdown(normalize_markdown(TEXTBOOK), "Textbook")
     ch = root.children[0]
     assert ch.kind == "chapter" and ch.number == "1"
     roman = [c.label for c in ch.children]
     assert roman == ["I", "II"]
     one = ch.children[0].children[0]
     assert one.label == "1" and [c.label for c in one.children] == ["1.1", "1.2"]
-    assert "1. Thu thập" in one.children[0].own_text
-    assert "C. Mác" in ch.children[1].children[0].own_text
+    assert "1. Collect" in one.children[0].own_text
+    assert "C. Marx" in ch.children[1].children[0].own_text
 
 
 def test_chunks_keep_sections():
-    root = parse_markdown(normalize_markdown(LEGAL), "Luật ATTT")
+    root = parse_markdown(normalize_markdown(LEGAL), "Network Security Act")
     chunks = build_chunks(root, max_chars=400, overlap=1)
     kinds = {c.node.kind for c in chunks}
     assert "article" in kinds
@@ -112,22 +112,28 @@ def test_chunks_keep_sections():
         if c.node.kind != "document":
             assert c.content.lstrip("# ").startswith(c.node.heading.split(" ")[0])
     md = tree_to_markdown(root)
-    assert "### Điều 3. Nguyên tắc" in md or "#### Điều 3. Nguyên tắc" in md
+    assert "### Article 3. Principles" in md or "#### Article 3. Principles" in md
 
 
 def test_long_section_split():
-    body = "\n\n".join(f"Đoạn {i} " + "nội dung " * 40 for i in range(10))
-    root = parse_markdown(f"Điều 1. Dài\n{body}", "X")
+    body = "\n\n".join(f"Paragraph {i} " + "content " * 40 for i in range(10))
+    root = parse_markdown(f"Article 1. Long\n{body}", "X")
     chunks = build_chunks(root, max_chars=800, overlap=1)
     assert len(chunks) > 1
     assert all(c.node.number == "1" for c in chunks)
-    assert all(c.content.startswith("# Điều 1. Dài") for c in chunks)
+    assert all(c.content.startswith("# Article 1. Long") for c in chunks)
     assert all(len(c.content) <= 800 for c in chunks)
 
 
 def test_parse_references():
-    refs = parse_references("Điểm b khoản 2 Điều 3 quy định gì?")
+    refs = parse_references("What does point b of paragraph 2 of Article 3 provide?")
     assert refs == {"article": "3", "clause": "2", "point": "b"}
-    assert parse_references("Nội dung chương II mục 1") == {"chapter": "2", "section": "1"}
-    assert parse_references("mục 1.2 nói gì") == {"num": "1.2"}
-    assert parse_references("an toàn thông tin là gì") == {}
+    assert parse_references("Content of chapter II section 1") == {"chapter": "2", "section": "1"}
+    assert parse_references("what does section 1.2 say") == {"num": "1.2"}
+    assert parse_references("what is information security") == {}
+
+
+def test_vietnamese_keywords_not_structural():
+    root = parse_markdown("Chương I\nĐiều 1. Phạm vi\n1. Một\n2. Hai", "x")
+    assert all(n.kind not in ("chapter", "article") for n in root.iter())
+    assert parse_references("Khoản 2 Điều 3") == {}

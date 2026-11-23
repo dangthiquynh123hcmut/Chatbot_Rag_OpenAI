@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..config import get_settings
-from ..audit import VIET_MARKED
 from ..hierarchy import INLINE_KINDS, Node
 from ..llm import judge_chat_json
 from ..rag import normalize_for_match, quote_in
@@ -18,21 +17,21 @@ from .memory import list_documents, load_document
 
 log = logging.getLogger(__name__)
 
-QUESTION_SYSTEM = """Bạn tạo bộ câu hỏi đánh giá cho hệ thống tra cứu tài liệu (RAG).
-Cho một MỤC trong tài liệu, hãy tạo câu hỏi mà CHỈ mục này trả lời được.
-Yêu cầu:
-- Viết câu hỏi bằng cùng ngôn ngữ với tài liệu.
-- "semantic": diễn đạt lại bằng từ ngữ khác, KHÔNG nhắc số hiệu/tiêu đề mục, không chép nguyên câu trong văn bản.
-- "factoid": hỏi một chi tiết cụ thể (con số, thời hạn, đối tượng, điều kiện, ô trong bảng).
-- "quote": trích NGUYÊN VĂN một đoạn ngắn (1-2 câu) trong mục chứa câu trả lời, giữ đúng từng chữ.
-- "answer": câu trả lời ngắn, đúng theo mục.
-- Không tạo câu hỏi cần kiến thức bên ngoài.
-Trả về JSON: {"questions": [{"type": "semantic|factoid", "question": "...", "answer": "...", "quote": "..."}]}"""
+QUESTION_SYSTEM = """You create evaluation questions for a document lookup (RAG) system.
+Given one SECTION of a document, create questions that ONLY this section can answer.
+Requirements:
+- Write questions and answers in English.
+- "semantic": paraphrase with different wording; do NOT mention the section number/title and do not copy sentences from the text.
+- "factoid": ask about one specific detail (a figure, deadline, subject, condition, table cell).
+- "quote": a VERBATIM short passage (1-2 sentences) from the section that contains the answer, word for word.
+- "answer": a short answer, faithful to the section.
+- Do not create questions that need outside knowledge.
+Return JSON: {"questions": [{"type": "semantic|factoid", "question": "...", "answer": "...", "quote": "..."}]}"""
 
-UNANSWERABLE_SYSTEM = """Bạn tạo câu hỏi KHÔNG THỂ trả lời từ tài liệu, để kiểm tra hệ thống RAG có biết từ chối hay không.
-Cho tên tài liệu và danh sách mục của nó, hãy tạo câu hỏi nghe hợp lý, cùng chủ đề, cùng ngôn ngữ với tài liệu,
-nhưng tài liệu chắc chắn KHÔNG chứa câu trả lời (ví dụ hỏi về mức phạt, số liệu, quốc gia, thời điểm không được đề cập).
-Trả về JSON: {"questions": ["...", "..."]}"""
+UNANSWERABLE_SYSTEM = """You create questions that CANNOT be answered from a document, to test whether a RAG system knows to decline.
+Given the document title and its list of sections, create plausible English questions on the same topic
+that the document certainly does NOT answer (e.g. about penalties, figures, countries or dates it does not mention).
+Return JSON: {"questions": ["...", "..."]}"""
 
 KIND_PRIORITY = {"point": 0, "clause": 1, "article": 2, "num": 3, "roman": 4, "md": 5, "subsection": 6, "section": 7}
 
@@ -79,14 +78,6 @@ def _stratified_sample(nodes: list[Node], k: int, rng: random.Random) -> list[No
     return picked
 
 
-def document_language(root: Node) -> str:
-    words = re.findall(r"[^\W\d_]+", " ".join(n.own_text for n in root.iter()).lower())
-    if not words:
-        return "tiếng Việt"
-    marked = sum(1 for w in words if any(ch in VIET_MARKED for ch in w))
-    return "tiếng Việt" if marked / len(words) > 0.15 else "tiếng Anh (English)"
-
-
 def refine_gold(node: Node, quote: str) -> Node:
     if not quote.strip():
         return node
@@ -102,13 +93,13 @@ def reference_question(node: Node) -> str | None:
     if "article" in r:
         parts = []
         if "point" in r:
-            parts.append(f"Điểm {r['point']}")
+            parts.append(f"point {r['point']}")
         if "clause" in r:
-            parts.append(f"khoản {r['clause']}" if parts else f"Khoản {r['clause']}")
-        parts.append(f"Điều {r['article']}")
-        return " ".join(parts) + " quy định gì?"
+            parts.append(f"paragraph {r['clause']}")
+        parts.append(f"Article {r['article']}")
+        return "What does " + " of ".join(parts) + " provide?"
     if node.kind == "num" and "num" in r and "." in r["num"]:
-        return f"Mục {r['num']} nói về nội dung gì?"
+        return f"What is Section {r['num']} about?"
     return None
 
 
@@ -118,12 +109,11 @@ def _overlap(question: str, text: str) -> float:
     return len(q & t) / max(1, len(q))
 
 
-def _llm_questions(title: str, node: Node, per_section: int, language: str) -> list[dict]:
+def _llm_questions(title: str, node: Node, per_section: int) -> list[dict]:
     text = node.full_markdown()
     user = (
-        f"Tài liệu: {title}\nVị trí: {' > '.join(node.path)}\n"
-        f"Ngôn ngữ bắt buộc của câu hỏi và đáp án: {language}\n"
-        f"Số câu cần tạo: {per_section} (trộn semantic và factoid)\n\nNỘI DUNG MỤC:\n{text}"
+        f"Document: {title}\nLocation: {' > '.join(node.path)}\n"
+        f"Number of questions: {per_section} (mix semantic and factoid)\n\nSECTION CONTENT:\n{text}"
     )
     try:
         data = json.loads(judge_chat_json(QUESTION_SYSTEM, user, temperature=0.4))
@@ -147,11 +137,11 @@ def _llm_questions(title: str, node: Node, per_section: int, language: str) -> l
     return out
 
 
-def _unanswerable(title: str, root: Node, n: int, language: str) -> list[str]:
+def _unanswerable(title: str, root: Node, n: int) -> list[str]:
     if n <= 0:
         return []
     outline = "\n".join(" > ".join(x.path) for x in root.iter() if x.kind not in ("document", "clause", "point"))[:6000]
-    user = f"Tài liệu: {title}\nNgôn ngữ bắt buộc của câu hỏi: {language}\nSố câu cần tạo: {n}\n\nDANH SÁCH MỤC:\n{outline}"
+    user = f"Document: {title}\nNumber of questions: {n}\n\nSECTIONS:\n{outline}"
     try:
         data = json.loads(judge_chat_json(UNANSWERABLE_SYSTEM, user, temperature=0.6))
     except Exception as exc:
@@ -175,7 +165,6 @@ def generate_dataset(
         title, root = load_document(path)
         slug = _slug(path.name)
         picked = _stratified_sample(_candidate_sections(root), sections_per_doc, rng)
-        language = document_language(root)
         counter = 0
         seen_questions: set[str] = set()
 
@@ -195,13 +184,13 @@ def generate_dataset(
                 add(question=rq, type="reference", gold_path=node.path, gold_refs=node.refs, section_kind=node.kind)
         if use_llm:
             with ThreadPoolExecutor(max_workers=settings.bedrock_max_workers) as pool:
-                results = list(pool.map(lambda n: _llm_questions(title, n, questions_per_section, language), picked))
+                results = list(pool.map(lambda n: _llm_questions(title, n, questions_per_section), picked))
             for node, qs in zip(picked, results):
                 for q in qs:
                     gold = refine_gold(node, q["quote"])
                     add(question=q["question"], type=q["type"], gold_path=gold.path, gold_refs=gold.refs,
                         gold_quote=q["quote"], reference_answer=q["answer"], section_kind=gold.kind)
-            for q in _unanswerable(title, root, unanswerable_per_doc, language):
+            for q in _unanswerable(title, root, unanswerable_per_doc):
                 add(question=q, type="unanswerable", answerable=False)
         log.info("%s: %d sections sampled, %d items", path.name, len(picked), counter)
     return items

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import string
 import unicodedata
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -10,17 +11,12 @@ from pathlib import Path
 
 from .config import get_settings
 from .converters import convert_to_markdown
-from .hierarchy import INLINE_KINDS, Node, build_chunks, classify_line, nfc, parse_markdown, tree_to_markdown
+from .hierarchy import INLINE_KINDS, KIND_LABELS, PREAMBLE, Node, build_chunks, classify_line, nfc, parse_markdown, tree_to_markdown
 
 STATUS_ORDER = {"pass": 0, "info": 1, "warn": 2, "fail": 3}
 
-VIET_VOWELS = "aàáạảãâầấậẩẫăằắặẳẵeèéẹẻẽêềếệểễiìíịỉĩoòóọỏõôồốộổỗơờớợởỡuùúụủũưừứựửữyỳýỵỷỹ"
-VIET_LETTERS = set(VIET_VOWELS + "đbcdghklmnpqrstvx" + "fjwz")
-VIET_MARKED = set(VIET_VOWELS + "đ") - set("aeiouy")
-TONE_MARKS = {"̀", "́", "̃", "̉", "̣"}
-SYLLABLE_RE = re.compile(
-    rf"^(ngh|ng|nh|ch|gh|gi|kh|ph|qu|th|tr|[bcdđghklmnpqrstvx])?([{VIET_VOWELS}]{{1,3}})(ch|nh|ng|[cmnpt])?$"
-)
+ASCII_LETTERS = set(string.ascii_lowercase)
+MOJIBAKE_RE = re.compile(r"[ÃÂâ][\x80-\xbf€™œ\u0080-\u00bf]|\ufffd")
 TOKEN_RE = re.compile(r"[^\W\d_]+")
 TABLE_SEP_RE = re.compile(r"^\|\s*:?-{3,}")
 STRUCTURAL_KINDS = ("part", "chapter", "section", "subsection", "article")
@@ -110,13 +106,6 @@ def extract_source(path: Path) -> tuple[list[str], int]:
     raise ValueError(f"Không hỗ trợ {ext}")
 
 
-def is_valid_syllable(tok: str) -> bool:
-    if not SYLLABLE_RE.match(tok):
-        return False
-    marks = [ch for ch in unicodedata.normalize("NFD", tok) if ch in TONE_MARKS]
-    return len(marks) <= 1
-
-
 def check_unicode(raw_pages: list[str], markdown: str) -> Check:
     raw = "".join(raw_pages)
     raw_toks = TOKEN_RE.findall(raw)
@@ -128,21 +117,19 @@ def check_unicode(raw_pages: list[str], markdown: str) -> Check:
     return Check("Unicode NFC", status, summary, metrics={"source_non_nfc_ratio": round(ratio, 4), "markdown_nfc": md_ok})
 
 
-def check_vietnamese(markdown: str) -> Check:
+def check_text_quality(markdown: str) -> Check:
     toks = tokens(markdown)
-    odd_char = [t for t in toks if any(ch not in VIET_LETTERS and not ("a" <= ch <= "z") for ch in t)]
-    viet = [t for t in toks if any(ch in VIET_MARKED for ch in t)]
-    if len(viet) < 50:
-        return Check("Chất lượng chữ tiếng Việt", "info", f"Ít chữ tiếng Việt có dấu ({len(viet)} từ) – bỏ qua",
-                     metrics={"vietnamese_tokens": len(viet)})
-    invalid = [t for t in viet if not is_valid_syllable(t)]
-    inv_ratio = len(invalid) / len(viet)
-    odd_ratio = len(odd_char) / max(1, len(toks))
-    status = max(_status(inv_ratio, 0.03, 0.15, False), _status(odd_ratio, 0.01, 0.05, False), key=STATUS_ORDER.get)
-    top = [f"{w} ×{n}" for w, n in Counter(invalid + odd_char).most_common(15)]
-    summary = f"{inv_ratio:.1%} âm tiết không hợp lệ, {odd_ratio:.1%} từ có ký tự lạ (nghi lỗi font TCVN3/VNI hoặc OCR)"
-    return Check("Chất lượng chữ tiếng Việt", status, summary, top,
-                 {"invalid_syllable_ratio": round(inv_ratio, 4), "odd_char_ratio": round(odd_ratio, 4)})
+    if len(toks) < 50:
+        return Check("Chất lượng chữ", "info", f"Quá ít từ ({len(toks)}) – bỏ qua", metrics={"tokens": len(toks)})
+    odd_char = [t for t in toks if any(ch not in ASCII_LETTERS for ch in t)]
+    mojibake = MOJIBAKE_RE.findall(markdown)
+    odd_ratio = len(odd_char) / len(toks)
+    status = "fail" if mojibake else _status(odd_ratio, 0.01, 0.05, False)
+    top = [f"{w} ×{n}" for w, n in Counter(odd_char).most_common(15)]
+    summary = (f"{odd_ratio:.1%} từ có ký tự ngoài bảng chữ cái tiếng Anh, {len(mojibake)} chuỗi mojibake "
+               "(nghi lỗi encoding hoặc OCR)")
+    return Check("Chất lượng chữ", status, summary, top,
+                 {"odd_char_ratio": round(odd_ratio, 4), "mojibake": len(mojibake)})
 
 
 def check_coverage(raw_pages: list[str], markdown: str) -> Check:
@@ -198,11 +185,12 @@ def check_sequences(root: Node) -> Check:
     nums = [v for v in (_int_part(a.number) for a in articles) if v is not None]
     gaps, dups = _numbers_gaps(nums)
     if gaps:
-        details.append(f"Thiếu Điều: {', '.join(map(str, gaps[:30]))}")
+        details.append(f"Thiếu Article: {', '.join(map(str, gaps[:30]))}")
     if dups:
-        details.append(f"Điều bị trùng: {', '.join(map(str, dups[:30]))}")
+        details.append(f"Article bị trùng: {', '.join(map(str, dups[:30]))}")
     for parent in root.iter():
-        for kind, label in (("chapter", "Chương"), ("section", "Mục"), ("subsection", "Tiểu mục")):
+        for kind in ("chapter", "section", "subsection"):
+            label = KIND_LABELS[kind]
             kids = [_int_part(c.number) for c in parent.children if c.kind == kind]
             kids = [k for k in kids if k is not None]
             g, d = _numbers_gaps(kids)
@@ -213,7 +201,7 @@ def check_sequences(root: Node) -> Check:
             if d:
                 details.append(f"{parent.display()}: trùng {label} {', '.join(map(str, d[:20]))}")
     status = "warn" if details else "pass"
-    summary = f"{len(articles)} Điều" + (f", phát hiện {len(details)} vấn đề về số thứ tự" if details else ", số thứ tự liên tục")
+    summary = f"{len(articles)} Article" + (f", phát hiện {len(details)} vấn đề về số thứ tự" if details else ", số thứ tự liên tục")
     return Check("Tính liên tục số thứ tự", status, summary, details, {"articles": len(articles)})
 
 
@@ -223,7 +211,7 @@ def check_missed_headings(root: Node) -> Check:
         for ln in n.lines:
             cand = classify_line(ln)
             if cand and cand.kind in STRUCTURAL_KINDS:
-                where = n.display() if n.kind != "document" else "Phần mở đầu"
+                where = n.display() if n.kind != "document" else PREAMBLE
                 details.append(f"Trong '{where}': {ln[:110]}")
     status = "warn" if details else "pass"
     return Check("Tiêu đề bị bỏ sót", status,
@@ -292,7 +280,7 @@ def check_chunks(root: Node, max_chars: int, overlap: int) -> Check:
     for c in chunks:
         scope = c.node.full_markdown() if c.node.kind != "document" else c.node.own_text
         if not chunk_within(c.content, scope):
-            violations.append(" > ".join(c.node.path) if c.node.kind != "document" else "Phần mở đầu")
+            violations.append(" > ".join(c.node.path) if c.node.kind != "document" else PREAMBLE)
         if len(c.content) > max_chars + 50:
             oversize.append(f"{' > '.join(c.node.path)} ({len(c.content)} ký tự)")
     split = sum(1 for c in chunks if c.part > 0)
@@ -317,7 +305,7 @@ def audit_file(path: Path) -> AuditReport:
              **{k: v for k, v in kinds.most_common()}}
     checks = [
         check_unicode(raw_pages, canonical),
-        check_vietnamese(canonical),
+        check_text_quality(canonical),
         check_coverage(raw_pages, canonical),
         check_tables(source_tables, canonical),
         check_sequences(root),

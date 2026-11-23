@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 from .config import get_settings
 from .converters import convert_to_markdown
 from .db import connection
-from .hierarchy import build_chunks, embedding_text, parse_markdown, tree_to_markdown
+from .hierarchy import PREAMBLE, build_chunks, embedding_text, parse_markdown, tree_to_markdown
 from .llm import embed_texts
 from .metadata import DocMeta, display_label, extract_metadata
 
@@ -69,10 +69,10 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                     n.depth,
                     n.kind,
                     n.number,
-                    n.label if n.kind != "document" else "Phần mở đầu",
+                    n.label if n.kind != "document" else PREAMBLE,
                     n.title,
                     n.heading,
-                    n.path if n.kind != "document" else ["Phần mở đầu"],
+                    n.path if n.kind != "document" else [PREAMBLE],
                     Jsonb(n.refs),
                     n.own_text,
                     n.full_markdown() if n.kind != "document" else n.own_text,

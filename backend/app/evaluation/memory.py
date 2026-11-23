@@ -15,7 +15,7 @@ from ..candidates import Candidate, keyword_terms
 from ..config import get_settings
 from ..converters import SUPPORTED_EXTENSIONS, convert_to_markdown
 from ..doc_resolver import CatalogEntry
-from ..hierarchy import Node, build_chunks, embedding_text, parse_markdown, tree_to_markdown
+from ..hierarchy import PREAMBLE, Node, build_chunks, embedding_text, parse_markdown, tree_to_markdown
 from ..metadata import DocMeta, find_identifiers, pdf_info
 from ..llm import embed_texts
 from ..references import STRONG_KEYS, ref_variants
@@ -123,7 +123,7 @@ class MemoryBackend:
                 is_root = n.kind == "document"
                 sec = MemSection(
                     sid, doc_id, path.name, title, n,
-                    ["Phần mở đầu"] if is_root else n.path,
+                    [PREAMBLE] if is_root else n.path,
                     n.own_text if is_root else n.full_markdown(),
                 )
                 be.sections[sid] = sec

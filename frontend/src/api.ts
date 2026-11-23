@@ -14,7 +14,7 @@ import type {
 } from "./types.ts";
 
 const BASE: string = import.meta.env.VITE_API_BASE ?? "/api";
-const TOKEN_KEY = "rag.access_token";
+const LEGACY_TOKEN_KEY = "rag.access_token";
 
 class ApiError extends Error {
   readonly status: number;
@@ -27,26 +27,45 @@ class ApiError extends Error {
 }
 
 let unauthorizedHandler: (() => void) | null = null;
+// The short-lived access token lives only in memory; the refresh token is an httpOnly cookie
+// the browser sends to /api/auth/* automatically, so page scripts never see it.
+let accessToken: string | null = null;
+let refreshInFlight: Promise<AuthResponse | null> | null = null;
+
+try {
+  localStorage.removeItem(LEGACY_TOKEN_KEY);
+} catch {
+  // storage unavailable – nothing to clean up
+}
 
 export function onUnauthorized(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
 }
 
 export function getToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return accessToken;
 }
 
 export function setToken(token: string | null): void {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    return;
+  accessToken = token;
+}
+
+/** Exchange the refresh cookie for a new access token. Concurrent callers share one request. */
+export function refreshSession(): Promise<AuthResponse | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(`${BASE}/auth/refresh`, { method: "POST", credentials: "include" })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const auth = (await res.json()) as AuthResponse;
+        accessToken = auth.access_token;
+        return auth;
+      })
+      .catch(() => null)
+      .finally(() => {
+        refreshInFlight = null;
+      });
   }
+  return refreshInFlight;
 }
 
 async function readError(res: Response): Promise<string> {
@@ -69,16 +88,21 @@ async function readError(res: Response): Promise<string> {
   return text || res.statusText;
 }
 
-async function send(path: string, init: RequestInit = {}): Promise<Response> {
+function isAuthEndpoint(path: string): boolean {
+  return path.startsWith("/auth/") && path !== "/auth/me" && path !== "/auth/change-password";
+}
+
+async function send(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(`${BASE}${path}`, { ...init, headers });
-  if (!res.ok) {
-    const message = await readError(res);
-    if (res.status === 401 && token && unauthorizedHandler) unauthorizedHandler();
-    throw new ApiError(res.status, message);
+  const res = await fetch(`${BASE}${path}`, { ...init, headers, credentials: "include" });
+  if (res.status === 401 && token && !isAuthEndpoint(path)) {
+    if (!retried && (await refreshSession())) return send(path, init, true);
+    accessToken = null;
+    unauthorizedHandler?.();
   }
+  if (!res.ok) throw new ApiError(res.status, await readError(res));
   return res;
 }
 
@@ -105,6 +129,13 @@ export const api = {
       jsonBody("POST", { username, password, display_name: displayName || null })
     ),
   me: () => requestJson<User>("/auth/me"),
+  logout: () => send("/auth/logout", { method: "POST" }).then(() => undefined),
+  logoutAll: () => send("/auth/logout-all", { method: "POST" }).then(() => undefined),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    requestJson<{ changed: boolean; revoked_sessions: number }>(
+      "/auth/change-password",
+      jsonBody("POST", { current_password: currentPassword, new_password: newPassword })
+    ),
   listDocuments: () => requestJson<{ documents: DocumentInfo[] }>("/documents"),
   uploadDocuments: (files: File[]) => {
     const form = new FormData();

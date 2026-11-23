@@ -84,8 +84,7 @@ def test_resolve_documents():
 def test_english_labels_and_refs():
     root = parse_markdown("Chapter 3. Components\nText.\nPart II\nPRINCIPLES\nMore.", "book")
     assert [n.display() for n in root.children] == ["Chapter 3. Components", "Part II. PRINCIPLES"]
-    vi = parse_markdown("Chương 2. Quy định\nNội dung.", "vi")
-    assert vi.children[0].display() == "Chương 2. Quy định"
+    assert parse_markdown("Subsection 2. Details\nText.", "x").children[0].display() == "Subsection 2. Details"
     assert parse_references("What does Chapter 5 of the book say?") == {"chapter": "5"}
     assert parse_references("Explain section 3.2 in the paper") == {"num": "3.2"}
     assert parse_references("Part II overview") == {"part": "2"}

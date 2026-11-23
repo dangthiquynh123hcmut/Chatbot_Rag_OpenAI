@@ -41,7 +41,7 @@ def pdf_to_markdown(path: Path) -> str:
     if scanned and len(md.strip()) < 50:
         raise ConversionError(
             "PDF là bản scan nhưng OCR không trích được nội dung. "
-            "Cài `pip install rapidocr onnxruntime` hoặc Tesseract kèm gói ngôn ngữ 'vie'."
+            "Cài `pip install rapidocr onnxruntime` hoặc Tesseract kèm gói ngôn ngữ 'eng'."
         )
     return md
 

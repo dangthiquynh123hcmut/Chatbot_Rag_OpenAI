@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorMessage, getToken, onUnauthorized, setToken } from "./api.ts";
+import { api, errorMessage, onUnauthorized, refreshSession, setToken } from "./api.ts";
 import ChatSidebar from "./components/ChatSidebar.tsx";
 import ChatView from "./components/ChatView.tsx";
 import DocumentPanel from "./components/DocumentPanel.tsx";
@@ -51,14 +51,10 @@ export default function App() {
   }, [resetSession]);
 
   useEffect(() => {
-    if (!getToken()) {
-      setAuthChecked(true);
-      return;
-    }
-    api
-      .me()
-      .then(setUser)
-      .catch(() => setToken(null))
+    refreshSession()
+      .then((auth) => {
+        if (auth) setUser(auth.user);
+      })
       .finally(() => setAuthChecked(true));
   }, []);
 
@@ -104,9 +100,14 @@ export default function App() {
   }
 
   function logout() {
-    setToken(null);
-    resetSession();
-    setNotice("");
+    void api
+      .logout()
+      .catch(() => undefined)
+      .finally(() => {
+        setToken(null);
+        resetSession();
+        setNotice("");
+      });
   }
 
   async function selectConversation(id: string) {

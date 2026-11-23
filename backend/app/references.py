@@ -5,23 +5,18 @@ import re
 from .hierarchy import nfc, normalize_number, roman_to_int
 
 REF_PATTERNS = [
-    ("part", re.compile(r"\bphần\s+(thứ\s+\w+|[ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
-    ("chapter", re.compile(r"\bchương\s+([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
-    ("subsection", re.compile(r"\btiểu\s+mục\s+([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
-    ("section", re.compile(r"(?<!tiểu )\bmục\s+([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
-    ("article", re.compile(r"\bđiều\s+(\d+[a-zđ]?)(?![\w.])", re.IGNORECASE)),
-    ("clause", re.compile(r"\bkhoản\s+(\d+)(?![\w.])", re.IGNORECASE)),
-    ("point", re.compile(r"\bđiểm\s+([a-zđ])(?![\w])", re.IGNORECASE)),
     ("part", re.compile(r"\bpart\s+([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
     ("chapter", re.compile(r"\b(?:chapter|chap\.|ch\.)\s*([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
-    ("section", re.compile(r"(?:\bsection|\bsec\.|§)\s*(\d+)(?![\w.])", re.IGNORECASE)),
+    ("subsection", re.compile(r"\bsubsection\s+([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
+    ("section", re.compile(r"(?:\bsection|\bsec\.|§)\s*([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
+    ("article", re.compile(r"\b(?:article|art\.)\s*(\d+[a-z]?)(?![\w.])", re.IGNORECASE)),
+    ("clause", re.compile(r"\b(?:paragraph|para\.|clause)\s*(\d+)(?![\w.])", re.IGNORECASE)),
+    ("point", re.compile(r"\bpoint\s+([a-z])(?![\w])", re.IGNORECASE)),
 ]
 DOTTED_RE = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3})+)(?![\w]|\.\d)")
 STRONG_KEYS = {"part", "chapter", "section", "subsection", "article", "num", "roman"}
 STOPWORDS = {
-    "là", "gì", "của", "và", "các", "những", "có", "được", "cho", "trong", "về", "theo", "nào",
-    "thế", "như", "này", "đó", "với", "the", "of", "and", "what", "is", "a", "an", "to", "in",
-    "quy", "định", "nội", "dung", "hỏi", "hãy", "cho", "biết", "tôi",
+    "the", "of", "and", "what", "is", "a", "an", "to", "in",
     "about", "above", "after", "again", "all", "also", "am", "are", "as", "at", "be", "been", "being",
     "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing", "during", "each", "explain",
     "for", "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "him", "his",

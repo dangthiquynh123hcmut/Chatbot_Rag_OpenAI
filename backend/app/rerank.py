@@ -13,21 +13,21 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-LLM_RERANK_SYSTEM = """Bạn là bộ xếp hạng (reranker) cho hệ thống tra cứu tài liệu tiêu chuẩn, văn bản luật.
-Với mỗi đoạn ứng viên, chấm điểm từ 0 đến 10 mức độ đoạn đó CHỨA TRỰC TIẾP thông tin trả lời câu hỏi.
-- 10: đoạn chính là mục/điều/khoản trả lời chính xác câu hỏi.
-- 5: liên quan nhưng chưa trả lời trực tiếp.
-- 0: không liên quan.
-Ưu tiên đúng vị trí (chương, mục, điều, khoản) nếu câu hỏi nhắc tới.
-Trả về JSON: {"scores": [{"id": <số thứ tự>, "score": <0-10>}]} cho TẤT CẢ ứng viên."""
+LLM_RERANK_SYSTEM = """You are a reranker for a lookup system over standards, regulations and technical documents.
+For each candidate passage, score from 0 to 10 how DIRECTLY it contains the information that answers the question.
+- 10: the passage is exactly the section/article/paragraph that answers the question.
+- 5: related but does not answer directly.
+- 0: unrelated.
+Prefer the exact location (chapter, section, article, paragraph) if the question mentions one.
+Return JSON: {"scores": [{"id": <number>, "score": <0-10>}]} for ALL candidates."""
 
 
 def _llm_rerank(query: str, cands: list[Candidate]) -> list[float]:
     blocks = []
     for i, c in enumerate(cands):
         text = c.content if len(c.content) <= 1500 else c.content[:1500] + " …"
-        blocks.append(f"[{i}] Tài liệu: {c.document_title}\nVị trí: {' > '.join(c.path)}\n{text}")
-    user = f"Câu hỏi: {query}\n\nỨng viên:\n\n" + "\n\n---\n\n".join(blocks)
+        blocks.append(f"[{i}] Document: {c.document_title}\nLocation: {' > '.join(c.path)}\n{text}")
+    user = f"Question: {query}\n\nCandidates:\n\n" + "\n\n---\n\n".join(blocks)
     data = json.loads(chat_json(LLM_RERANK_SYSTEM, user))
     scores = [0.0] * len(cands)
     for item in data.get("scores", []):

@@ -195,18 +195,18 @@ def cmd_check_aws(args: argparse.Namespace) -> None:
     run("STS GetCallerIdentity", lambda: caller_identity()["arn"])
     run(
         f"Embedding {s.bedrock_embedding_model}",
-        lambda: f"vector {len(embed_query('Phạm vi điều chỉnh của nghị định'))} chiều",
+        lambda: f"vector {len(embed_query('Scope of this regulation'))} chiều",
     )
     run(
         f"Converse {s.bedrock_llm_model}",
-        lambda: chat_json("Bạn là trợ lý kiểm tra kết nối.", 'Trả về {"ok": true}'),
+        lambda: chat_json("You are a connectivity check assistant.", 'Return {"ok": true}'),
     )
     if s.reranker == "bedrock" or args.all:
         dummy = [
-            SimpleNamespace(path=["Điều 1"], content="Phạm vi điều chỉnh của nghị định"),
-            SimpleNamespace(path=["Điều 2"], content="Thời tiết hôm nay đẹp"),
+            SimpleNamespace(path=["Article 1"], content="Scope of this regulation"),
+            SimpleNamespace(path=["Article 2"], content="The weather is nice today"),
         ]
-        run(f"Rerank {rerank_model_arn()}", lambda: f"scores {_bedrock_rerank('phạm vi điều chỉnh', dummy)}")
+        run(f"Rerank {rerank_model_arn()}", lambda: f"scores {_bedrock_rerank('scope of regulation', dummy)}")
     ok = True
     for name, passed, detail in steps:
         ok &= passed

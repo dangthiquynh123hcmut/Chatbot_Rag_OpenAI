@@ -95,13 +95,36 @@ python -m app.cli preview ..\data\van_ban.docx
 python -m app.cli ingest ..\data
 ```
 ```powershell
-python -m app.cli ask "Khoản 2 Điều 3 quy định gì?"
+python -m app.cli ask "What does paragraph 2 of Article 3 provide?"
 ```
 `preview` chỉ chuyển đổi và in cây phân tầng, không cần DB hay OpenAI – nên dùng để kiểm tra tài liệu trước khi nạp.
+
+### Migration schema (Alembic)
+Schema PostgreSQL được quản lý bằng Alembic (`backend/alembic.ini`, `backend/migrations/versions/`). Backend tự chạy `alembic upgrade head` khi khởi động. Các migration viết bằng SQL thuần (`op.execute`), không dùng ORM. DB tạo bằng bản cũ (trước khi có Alembic) được migration `0001` nâng cấp thẳng mà không mất dữ liệu.
+
+Các lệnh dưới chạy trong thư mục `backend`. `DATABASE_URL` được lấy từ `.env`.
+```powershell
+alembic current
+```
+```powershell
+alembic upgrade head
+```
+Tạo migration mới (sau đó sửa `upgrade()`/`downgrade()` bằng `op.execute("...")`):
+```powershell
+alembic revision -m "mo ta thay doi"
+```
+Xem SQL sẽ chạy mà không áp dụng vào DB:
+```powershell
+alembic upgrade head --sql
+```
 
 ### Test
 ```powershell
 cd backend; pip install -r requirements-dev.txt; python -m pytest -q tests
+```
+Test luồng đăng nhập (`tests/test_auth_flow.py`) cần một PostgreSQL **dùng để thử, có thể xóa**. Nếu không đặt `TEST_DATABASE_URL` thì các test này tự bỏ qua:
+```powershell
+$env:TEST_DATABASE_URL="postgresql://rag:rag@localhost:5432/rag_test"; python -m pytest -q tests
 ```
 Trên máy Windows bị Application Control chặn thư viện native (`pydantic_core`, `psycopg`…), chạy test trong container:
 ```powershell
@@ -210,13 +233,23 @@ cd backend; python -m app.cli check-aws --all
 Lệnh gọi STS, embedding, Converse và Rerank với câu mẫu ngắn và báo OK/FAIL từng bước.
 
 ### Lưu ý
-- Đổi provider làm đổi số chiều vector (1536 ↔ 1024). Backend sẽ báo lỗi khi khởi động nếu DB cũ không khớp; tạo lại DB bằng `docker compose down -v` rồi `docker compose up -d db` và nạp lại tài liệu.
+- Đổi provider làm đổi số chiều vector (1536 ↔ 1024). Backend sẽ báo lỗi khi khởi động nếu DB cũ không khớp. Khi đó, tạo lại DB bằng `docker compose down -v` rồi `docker compose up -d db`, hoặc viết một migration Alembic đổi kiểu cột `chunks.embedding`. Cách nào cũng phải nạp lại tài liệu.
 - Khi chạy backend bằng Docker (`--profile full`), thư mục `~/.aws` được mount read-only vào container; đặt `AWS_DIR` nếu nằm chỗ khác.
 - Mọi lệnh gọi Converse đều đặt `maxTokens` (`LLM_MAX_TOKENS`) để tránh giữ chỗ quota quá mức, client dùng adaptive retry.
 
 ## Đăng nhập & lịch sử chat
 
-- Tài khoản lưu trong bảng `users`; mật khẩu băm bằng **scrypt** (thư viện chuẩn Python, không cần thư viện native), phiên đăng nhập là **JWT** (HS256) gửi qua header `Authorization: Bearer …`.
+- Tài khoản lưu trong bảng `users`; mật khẩu băm bằng **scrypt** (thư viện chuẩn Python, không cần thư viện native).
+- Phiên đăng nhập dùng hai loại token:
+  - **Access token**: JWT (HS256), sống ngắn (mặc định 15 phút), gửi qua header `Authorization: Bearer …`. Frontend chỉ giữ token này trong bộ nhớ, không lưu vào `localStorage`.
+  - **Refresh token**: chuỗi ngẫu nhiên nằm trong cookie `rag_refresh` (`httpOnly`, `SameSite=Strict`, path `/api/auth`), nên JavaScript trên trang không đọc được. DB chỉ lưu bản băm SHA-256 (bảng `refresh_tokens`, `auth_sessions`, tạo bởi migration `0003`).
+- Khi access token hết hạn, frontend tự gọi `POST /api/auth/refresh` rồi gửi lại request. Mỗi refresh token chỉ dùng được một lần và được thay bằng token mới (rotation).
+  - Nếu một refresh token đã dùng bị gửi lại sau `REFRESH_REUSE_GRACE_SECONDS`, hệ thống coi là token bị đánh cắp và thu hồi cả phiên.
+  - Trong khoảng ân hạn đó (ví dụ hai tab cùng refresh), request vẫn nhận được access token.
+- Mỗi lần đăng nhập là một phiên (`auth_sessions`). Access token mang id phiên (`sid`), nên khi phiên bị thu hồi thì access token mất hiệu lực **ngay**, không phải chờ hết hạn:
+  - `POST /api/auth/logout`: thu hồi phiên hiện tại.
+  - `POST /api/auth/logout-all`: thu hồi mọi phiên của tài khoản.
+  - `POST /api/auth/change-password` (`current_password`, `new_password`): đổi mật khẩu và thu hồi mọi phiên khác, giữ phiên đang dùng.
 - **Người đăng ký đầu tiên tự động là `admin`**, những người sau là `user`.
 - Quyền: mọi API trừ `/api/health` và `/api/auth/*` đều cần đăng nhập; **upload / xử lý lại / xóa tài liệu chỉ admin** được làm. Người dùng thường chỉ xem tài liệu và hỏi đáp.
 - Mỗi người chỉ thấy hội thoại của mình (truy cập hội thoại người khác trả 404). Câu trả lời được lưu kèm toàn bộ kết quả (mục chính xác, trích dẫn, nguồn sau rerank) nên mở lại hội thoại cũ hiển thị đầy đủ như lúc hỏi. Tiêu đề hội thoại tự lấy từ câu hỏi đầu tiên, có thể đổi tên / xóa.
@@ -225,8 +258,12 @@ Cấu hình trong `.env`:
 
 | Biến | Mặc định | Ý nghĩa |
 | --- | --- | --- |
-| `JWT_SECRET` | (trống) | Khóa ký token. **Bắt buộc đặt** – nếu trống, backend sinh khóa ngẫu nhiên và mọi người bị đăng xuất mỗi lần khởi động lại |
-| `JWT_EXPIRE_MINUTES` | 720 | Thời hạn phiên đăng nhập |
+| `APP_ENV` | development | Khác `development` thì backend **không khởi động** nếu thiếu `JWT_SECRET` hoặc khóa ngắn hơn 32 ký tự |
+| `JWT_SECRET` | (trống) | Khóa ký access token. Ở development nếu để trống, backend sinh khóa ngẫu nhiên: mọi người bị đăng xuất khi khởi động lại và không chạy được nhiều worker |
+| `JWT_EXPIRE_MINUTES` | 15 | Thời hạn access token |
+| `REFRESH_TOKEN_DAYS` | 14 | Phiên tự hết hạn nếu không dùng trong khoảng này (mỗi lần refresh lại gia hạn) |
+| `REFRESH_REUSE_GRACE_SECONDS` | 30 | Khoảng ân hạn cho refresh đồng thời trước khi coi là dùng lại token |
+| `COOKIE_SECURE` | false | Đặt `true` khi chạy qua HTTPS để cookie refresh chỉ gửi qua HTTPS |
 | `ALLOW_REGISTRATION` | true | `false` để chỉ admin tạo tài khoản (tài khoản đầu tiên vẫn đăng ký được) |
 | `MIN_PASSWORD_LENGTH` | 8 | Độ dài mật khẩu tối thiểu |
 

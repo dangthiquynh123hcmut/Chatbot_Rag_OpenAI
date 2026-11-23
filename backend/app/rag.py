@@ -16,16 +16,15 @@ from .rerank import rerank
 
 log = logging.getLogger(__name__)
 
-ANSWER_SYSTEM = """Bạn là trợ lý tra cứu tài liệu (sách, bài báo khoa học, tài liệu kỹ thuật, quy định).
-Chỉ dùng thông tin trong các NGUỒN được cung cấp, tuyệt đối không dùng kiến thức bên ngoài.
-Nhiệm vụ:
-1. Xác định nguồn (chương/mục/tiểu mục) chứa chính xác thông tin trả lời câu hỏi.
-2. Trích NGUYÊN VĂN đoạn văn bản trả lời (quote) - phải là chuỗi con giữ nguyên từng chữ trong nguồn, không diễn giải, không thêm bớt.
-3. Viết câu trả lời ngắn gọn, nêu rõ vị trí (ví dụ: "According to Section 3.2 ..." hoặc "Theo Chương 5 ...").
-4. Viết "answer" bằng CÙNG NGÔN NGỮ với câu hỏi (câu hỏi tiếng Anh thì trả lời tiếng Anh). "quote" luôn giữ nguyên ngôn ngữ của nguồn.
-Nếu không nguồn nào chứa câu trả lời, đặt found=false và answer giải thích không tìm thấy.
-Đặc biệt: nếu nguồn chỉ có nội dung LIÊN QUAN nhưng không nêu đúng thông tin được hỏi (ví dụ hỏi mức phạt, số liệu, tên quốc gia, phiên bản, thời điểm mà nguồn không ghi), phải đặt found=false, không suy diễn hay trả lời gần đúng.
-Trả về JSON: {"found": true|false, "source": <số thứ tự nguồn>, "quote": "<trích nguyên văn>", "answer": "<câu trả lời>"}"""
+ANSWER_SYSTEM = """You are a document lookup assistant (books, scientific papers, technical documents, regulations).
+Use ONLY the information in the provided SOURCES; never use outside knowledge.
+Tasks:
+1. Identify the source (chapter/section/subsection) that contains exactly the information answering the question.
+2. Quote the answering passage VERBATIM ("quote") - it must be an exact substring of the source, word for word, with no paraphrasing, additions or omissions.
+3. Write a concise answer in English that states the location (e.g. "According to Section 3.2 ...").
+If no source contains the answer, set found=false and explain in "answer" that it was not found.
+In particular: if a source is only RELATED but does not state the exact information asked (e.g. a penalty amount, figure, country name, version or date the source does not give), set found=false; do not infer or approximate.
+Return JSON: {"found": true|false, "source": <source number>, "quote": "<verbatim quote>", "answer": "<answer>"}"""
 
 
 @dataclass
@@ -136,7 +135,7 @@ def generate_answer(trace: RetrievalTrace, backend: SearchBackend | None = None)
         "documents_detected": trace.documents_detected,
         "scope": trace.scope,
         "found": False,
-        "answer": "Không tìm thấy thông tin phù hợp trong tài liệu.",
+        "answer": "No relevant information was found in the documents.",
         "primary": None,
         "sources": [_source_dict(c, i + 1) for i, c in enumerate(sections)],
     }
@@ -148,14 +147,14 @@ def generate_answer(trace: RetrievalTrace, backend: SearchBackend | None = None)
         text = c.full_md or c.content
         if len(text) > 6000:
             text = (c.content if c.chunk_id else text[:6000]) + " …"
-        blocks.append(f"[NGUỒN {i}] Tài liệu: {c.document_title}\nVị trí: {' > '.join(c.path)}\n\n{text}")
-    user = f"Câu hỏi: {trace.query}\n\n" + "\n\n========\n\n".join(blocks)
+        blocks.append(f"[SOURCE {i}] Document: {c.document_title}\nLocation: {' > '.join(c.path)}\n\n{text}")
+    user = f"Question: {trace.query}\n\n" + "\n\n========\n\n".join(blocks)
 
     try:
         data = json.loads(chat_json(ANSWER_SYSTEM, user))
     except Exception as exc:
         log.exception("Answer generation failed")
-        data = {"found": True, "source": 0, "quote": "", "answer": f"(Không gọi được LLM: {exc})"}
+        data = {"found": True, "source": 0, "quote": "", "answer": f"(LLM call failed: {exc})"}
 
     found = bool(data.get("found"))
     try:

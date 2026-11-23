@@ -28,15 +28,15 @@ def offline(monkeypatch):
     monkeypatch.setattr(rag, "embed_query", _fake_vec)
 
     def fake_chat(system, user, temperature=0.0, model=None):
-        if "giám khảo" in system:
+        if "judge" in system:
             return json.dumps({"faithfulness": 1.0, "correctness": "correct", "reason": "ok"})
-        sources = re.findall(r"\[NGUỒN (\d+)\][^\n]*\nVị trí: ([^\n]*)\n\n(.*?)(?=\n\n========|\Z)", user, re.S)
+        sources = re.findall(r"\[SOURCE (\d+)\][^\n]*\nLocation: ([^\n]*)\n\n(.*?)(?=\n\n========|\Z)", user, re.S)
         question = user.split("\n", 1)[0].lower()
         if "mars" in question:
-            return json.dumps({"found": False, "source": 0, "quote": "", "answer": "Không có."})
+            return json.dumps({"found": False, "source": 0, "quote": "", "answer": "Not found."})
         idx, _, body = sources[0]
         line = next((ln for ln in body.splitlines() if ln and not ln.startswith("#")), body)
-        return json.dumps({"found": True, "source": int(idx), "quote": line, "answer": f"Theo {line}"})
+        return json.dumps({"found": True, "source": int(idx), "quote": line, "answer": f"According to {line}"})
 
     monkeypatch.setattr(rag, "chat_json", fake_chat)
     monkeypatch.setattr(llm, "chat_json", fake_chat)
@@ -45,59 +45,59 @@ def offline(monkeypatch):
 @pytest.fixture
 def docs(tmp_path):
     d = Document()
-    d.add_paragraph("CHƯƠNG I")
-    d.add_paragraph("QUY ĐỊNH CHUNG")
-    d.add_paragraph().add_run("Điều 1. Phạm vi điều chỉnh").bold = True
-    d.add_paragraph("Nghị định này quy định về quản lý chất lượng công trình xây dựng.")
-    d.add_paragraph().add_run("Điều 2. Nhiệm vụ khảo sát").bold = True
-    d.add_paragraph("1. Nhiệm vụ khảo sát được lập cho từng bước thiết kế.")
-    d.add_paragraph("2. Nội dung nhiệm vụ gồm:")
-    d.add_paragraph("a) Mục đích khảo sát;")
-    d.add_paragraph("b) Phạm vi khảo sát xây dựng công trình;")
-    d.add_paragraph().add_run("Điều 3. Giám sát khảo sát").bold = True
-    d.add_paragraph("Chủ đầu tư có trách nhiệm giám sát công tác khảo sát.")
+    d.add_paragraph("CHAPTER I")
+    d.add_paragraph("GENERAL PROVISIONS")
+    d.add_paragraph().add_run("Article 1. Scope of regulation").bold = True
+    d.add_paragraph("This decree governs quality management of construction works.")
+    d.add_paragraph().add_run("Article 2. Survey tasks").bold = True
+    d.add_paragraph("1. Survey tasks are prepared for each design step.")
+    d.add_paragraph("2. The task content includes:")
+    d.add_paragraph("a) Purpose of the survey;")
+    d.add_paragraph("b) Scope of the construction survey;")
+    d.add_paragraph().add_run("Article 3. Survey supervision").bold = True
+    d.add_paragraph("The project owner is responsible for supervising the survey work.")
     folder = tmp_path / "docs"
     folder.mkdir()
-    d.save(folder / "nghi_dinh.docx")
+    d.save(folder / "decree.docx")
     return folder
 
 
 def test_path_relation_and_ranks():
-    gold = ["Chương I", "Điều 2", "Khoản 2"]
+    gold = ["Chapter I", "Article 2", "Paragraph 2"]
     assert M.path_relation(gold, gold) == "exact"
-    assert M.path_relation(["Chương I", "Điều 2"], gold) == "ancestor"
-    assert M.path_relation(gold + ["Điểm b"], gold) == "descendant"
-    assert M.path_relation(["Chương I", "Điều 3"], gold) == "none"
+    assert M.path_relation(["Chapter I", "Article 2"], gold) == "ancestor"
+    assert M.path_relation(gold + ["Point b"], gold) == "descendant"
+    assert M.path_relation(["Chapter I", "Article 3"], gold) == "none"
     ranks = [0, 2, None, 6]
     assert M.recall_at(ranks, 1) == 0.25 and M.recall_at(ranks, 5) == 0.5
     assert M.mrr(ranks) == pytest.approx((1 + 1 / 3 + 1 / 7) / 4)
-    assert M.token_f1("chủ đầu tư giám sát", "Chủ đầu tư có trách nhiệm giám sát") == pytest.approx(10 / 13)
+    assert M.token_f1("the owner supervises the survey", "The owner is responsible for supervising the survey") == pytest.approx(8 / 13)
 
 
 def test_reference_question_templates(docs):
-    _, root = mem.load_document(docs / "nghi_dinh.docx")
+    _, root = mem.load_document(docs / "decree.docx")
     point = next(n for n in root.iter() if n.kind == "point" and n.number == "b")
-    assert reference_question(point) == "Điểm b khoản 2 Điều 2 quy định gì?"
+    assert reference_question(point) == "What does point b of paragraph 2 of Article 2 provide?"
 
 
 def test_memory_backend_search(docs, offline, tmp_path):
     be = mem.MemoryBackend.from_paths(docs, tmp_path / "cache")
     assert (tmp_path / "cache").exists() and any((tmp_path / "cache").iterdir())
     hits = be.lookup_by_references({"article": "2", "clause": "2"}, None)
-    assert hits and hits[0].path[-1] == "Khoản 2"
-    kw = be.keyword_search("giám sát khảo sát chủ đầu tư", None, 3)
-    assert kw[0].path[-1] == "Điều 3. Giám sát khảo sát"
-    vec = be.vector_search(_fake_vec("chủ đầu tư giám sát khảo sát"), None, 3)
-    assert vec[0].path[-1] == "Điều 3. Giám sát khảo sát"
+    assert hits and hits[0].path[-1] == "Paragraph 2"
+    kw = be.keyword_search("project owner supervising survey", None, 3)
+    assert kw[0].path[-1] == "Article 3. Survey supervision"
+    vec = be.vector_search(_fake_vec("project owner supervising the survey work"), None, 3)
+    assert vec[0].path[-1] == "Article 3. Survey supervision"
 
 
 def test_end_to_end_evaluation(docs, offline, tmp_path):
     items = generate_dataset(docs, sections_per_doc=10, use_llm=False)
     assert items and all(i.type == "reference" for i in items)
-    items.append(EvalItem(id="x-1", document="nghi_dinh.docx", question="Ai giám sát công tác khảo sát?",
-                          type="semantic", gold_path=["Chương I. QUY ĐỊNH CHUNG", "Điều 3. Giám sát khảo sát"],
-                          gold_quote="Chủ đầu tư có trách nhiệm giám sát công tác khảo sát."))
-    items.append(EvalItem(id="x-2", document="nghi_dinh.docx", question="Quy định trên sao Mars là gì?",
+    items.append(EvalItem(id="x-1", document="decree.docx", question="Who supervises the survey work?",
+                          type="semantic", gold_path=["Chapter I. GENERAL PROVISIONS", "Article 3. Survey supervision"],
+                          gold_quote="The project owner is responsible for supervising the survey work."))
+    items.append(EvalItem(id="x-2", document="decree.docx", question="What are the rules on Mars?",
                           type="unanswerable", answerable=False))
     path = tmp_path / "ds.jsonl"
     save_dataset(items, path)
@@ -150,13 +150,12 @@ def test_judge_falls_back_when_model_unavailable(monkeypatch):
 def test_generation_helpers(docs):
     import random
 
-    from app.evaluation.generate import _candidate_sections, _stratified_sample, document_language, refine_gold
+    from app.evaluation.generate import _candidate_sections, _stratified_sample, refine_gold
 
-    _, root = mem.load_document(docs / "nghi_dinh.docx")
+    _, root = mem.load_document(docs / "decree.docx")
     article = next(n for n in root.iter() if n.kind == "article" and n.number == "2")
-    assert refine_gold(article, "b) Phạm vi khảo sát xây dựng công trình;").path[-1] == "Điểm b"
+    assert refine_gold(article, "b) Scope of the construction survey;").path[-1] == "Point b"
     assert refine_gold(article, "").path == article.path
-    assert document_language(root) == "tiếng Việt"
     picked = _stratified_sample(_candidate_sections(root), 20, random.Random(1))
     ids = {id(n) for n in picked}
     for n in picked:
