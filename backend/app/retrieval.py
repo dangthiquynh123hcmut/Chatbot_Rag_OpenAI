@@ -6,6 +6,8 @@ from psycopg.types.json import Jsonb
 
 from .candidates import Candidate, keyword_terms
 from .db import connection
+from .doc_resolver import CatalogEntry
+from .metadata import DocMeta
 from .references import STRONG_KEYS, ref_variants
 
 SECTION_COLS = """s.id AS section_id, s.document_id, d.title AS document_title, d.filename AS document_filename,
@@ -36,6 +38,11 @@ class DbBackend:
                 "ORDER BY filename, created_at DESC"
             ).fetchall()
         return {r["filename"]: r["id"] for r in rows}
+
+    def document_catalog(self) -> list[CatalogEntry]:
+        with connection() as conn:
+            rows = conn.execute("SELECT id, title, meta FROM documents WHERE status='ready'").fetchall()
+        return [CatalogEntry(str(r["id"]), r["title"], DocMeta.from_dict(r["meta"])) for r in rows]
 
     def lookup_by_references(
         self, refs: dict[str, str], document_ids: list[uuid.UUID] | None, limit: int = 5

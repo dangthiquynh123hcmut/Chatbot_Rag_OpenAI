@@ -17,7 +17,7 @@ SEP = r"[\s.:\-–—]*"
 NUM_TOKEN = r"(thứ\s+[^\s.:\-–—]+|[IVXLCDM]+|\d+)"
 
 STRUCT_PATTERNS = [
-    ("part", 10, re.compile(rf"^(?:phần)\s+{NUM_TOKEN}(?![\w])({SEP})(.*)$", re.IGNORECASE)),
+    ("part", 10, re.compile(rf"^(?:phần|part)\s+{NUM_TOKEN}(?![\w])({SEP})(.*)$", re.IGNORECASE)),
     ("chapter", 20, re.compile(rf"^(?:chương|chapter)\s+([IVXLCDM]+|\d+)(?![\w])({SEP})(.*)$", re.IGNORECASE)),
     ("subsection", 40, re.compile(rf"^(?:tiểu\s+mục)\s+([IVXLCDM]+|\d+)(?![\w])({SEP})(.*)$", re.IGNORECASE)),
     ("section", 30, re.compile(rf"^(?:mục|section)\s+([IVXLCDM]+|\d+)(?![\w])({SEP})(.*)$", re.IGNORECASE)),
@@ -38,6 +38,15 @@ KIND_LABELS = {
     "article": "Điều",
     "clause": "Khoản",
     "point": "Điểm",
+}
+EN_LABELS = {
+    "part": "Part",
+    "chapter": "Chapter",
+    "section": "Section",
+    "subsection": "Subsection",
+    "article": "Article",
+    "clause": "Paragraph",
+    "point": "Point",
 }
 INLINE_KINDS = {"clause", "point"}
 MD_RANKS = {1: 15, 2: 25, 3: 35, 4: 47, 5: 57, 6: 67}
@@ -110,6 +119,7 @@ class Candidate:
     heading: str
     depth_hint: int = 0
     marked: bool = False
+    label_word: str = ""
 
 
 @dataclass
@@ -192,6 +202,11 @@ def render_heading(node: Node, level: int) -> str:
     return "#" * max(1, min(level, 6)) + " " + node.heading
 
 
+def label_for(kind: str, text: str) -> str:
+    keyword = text.split(None, 1)[0] if text else ""
+    return EN_LABELS[kind] if keyword.isascii() else KIND_LABELS[kind]
+
+
 def match_structural(text: str, marked: bool) -> Candidate | None:
     cand = _match_structural(text, marked)
     if cand is not None:
@@ -216,16 +231,17 @@ def _match_structural(text: str, marked: bool) -> Candidate | None:
             continue
         if len(rest) > 250:
             continue
-        label = KIND_LABELS[kind]
+        label = label_for(kind, text)
         num_display = raw if not raw.lower().startswith("thứ") else raw.lower()
         heading = f"{label} {num_display}" + (f". {rest}" if rest else "")
-        return Candidate(kind, rank, raw, normalize_number(raw), rest, heading)
+        return Candidate(kind, rank, raw, normalize_number(raw), rest, heading, label_word=label)
     m = ARTICLE_RE.match(text)
     if m:
         raw, punct, rest = m.group(1), m.group(2), m.group(3).strip()
         if punct or marked or not rest:
-            heading = f"Điều {raw}." + (f" {rest}" if rest else "")
-            return Candidate("article", 50, raw, normalize_number(raw), rest, heading)
+            label = label_for("article", text)
+            heading = f"{label} {raw}." + (f" {rest}" if rest else "")
+            return Candidate("article", 50, raw, normalize_number(raw), rest, heading, label_word=label)
         return None
     m = ROMAN_RE.match(text)
     if m:
@@ -300,6 +316,15 @@ class HierarchyParser:
                 return c
         return None
 
+    @staticmethod
+    def _article_ancestor(node: Node) -> Node | None:
+        cur: Node | None = node
+        while cur is not None:
+            if cur.kind == "article":
+                return cur
+            cur = cur.parent
+        return None
+
     def _is_inside_article(self, parent: Node) -> bool:
         cur: Node | None = parent
         while cur is not None:
@@ -344,14 +369,16 @@ class HierarchyParser:
         while self.stack and self.stack[-1] is not parent:
             self.stack.pop()
         kind = cand.kind
-        label = KIND_LABELS.get(kind, "")
+        label = cand.label_word or KIND_LABELS.get(kind, "")
+        article = self._article_ancestor(parent)
+        inline_labels = EN_LABELS if article is not None and article.label.startswith("Article") else KIND_LABELS
         if kind == "num":
-            if cand.depth_hint == 1 and self._is_inside_article(parent):
-                kind, label = "clause", KIND_LABELS["clause"] + f" {cand.number}"
+            if cand.depth_hint == 1 and article is not None:
+                kind, label = "clause", inline_labels["clause"] + f" {cand.number}"
             else:
                 label = cand.raw_number.rstrip(".")
         elif kind == "point":
-            label = (KIND_LABELS["point"] + f" {cand.number}") if self._is_inside_article(parent) else f"{cand.number})"
+            label = (inline_labels["point"] + f" {cand.number}") if article is not None else f"{cand.number})"
         elif kind == "roman":
             label = cand.raw_number
         elif kind == "md":

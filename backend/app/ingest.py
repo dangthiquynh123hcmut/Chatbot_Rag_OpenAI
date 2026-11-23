@@ -11,6 +11,7 @@ from .converters import convert_to_markdown
 from .db import connection
 from .hierarchy import build_chunks, embedding_text, parse_markdown, tree_to_markdown
 from .llm import embed_texts
+from .metadata import DocMeta, display_label, extract_metadata
 
 log = logging.getLogger(__name__)
 
@@ -35,12 +36,16 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
     settings = get_settings()
     try:
         with connection() as conn:
-            row = conn.execute("SELECT title FROM documents WHERE id=%s", (doc_id,)).fetchone()
+            row = conn.execute("SELECT title, filename, meta FROM documents WHERE id=%s", (doc_id,)).fetchone()
         if row is None:
             return
-        title = row["title"]
 
         raw_md = convert_to_markdown(path)
+        meta = DocMeta.from_dict(row["meta"])
+        if meta.source != "manual":
+            meta = extract_metadata(path, raw_md, row["filename"], use_llm=settings.metadata_llm)
+        title = meta.title or row["title"]
+        label = display_label(meta, title)
         root = parse_markdown(raw_md, title)
         canonical_md = tree_to_markdown(root)
         (settings.markdown_dir / f"{doc_id}.md").write_text(canonical_md, encoding="utf-8")
@@ -48,7 +53,7 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
         chunks = build_chunks(root, settings.chunk_max_chars, settings.chunk_overlap_paragraphs)
         if not chunks:
             raise ValueError("Tài liệu không có nội dung để lập chỉ mục.")
-        embed_inputs = [embedding_text(title, c.node, c.content) for c in chunks]
+        embed_inputs = [embedding_text(label, c.node, c.content) for c in chunks]
         vectors = embed_texts(embed_inputs)
         embedding_model = f"{settings.llm_provider}:{settings.active_embedding_model}:{settings.embedding_dim}"
 
@@ -95,13 +100,30 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                     )
                 conn.execute(
                     """UPDATE documents SET status='ready', error=NULL, markdown=%s,
-                       num_sections=%s, num_chunks=%s WHERE id=%s""",
-                    (canonical_md, len(section_rows) - 1, len(chunk_rows), doc_id),
+                       num_sections=%s, num_chunks=%s, title=%s, meta=%s WHERE id=%s""",
+                    (canonical_md, len(section_rows) - 1, len(chunk_rows), title, Jsonb(meta.to_dict()), doc_id),
                 )
         log.info("Ingested %s: %d sections, %d chunks", path.name, len(section_rows) - 1, len(chunk_rows))
     except Exception as exc:
         log.exception("Ingest failed for %s", path)
         _set_status(doc_id, "error", str(exc)[:2000])
+
+
+def refresh_metadata(doc_id: uuid.UUID, stored_file: Path | None, force: bool = False) -> DocMeta | None:
+    with connection() as conn:
+        row = conn.execute("SELECT filename, title, markdown, meta FROM documents WHERE id=%s", (doc_id,)).fetchone()
+    if row is None:
+        return None
+    current = DocMeta.from_dict(row["meta"])
+    if current.source == "manual" and not force:
+        return current
+    meta = extract_metadata(stored_file, row["markdown"] or "", row["filename"], use_llm=get_settings().metadata_llm)
+    with connection() as conn:
+        conn.execute(
+            "UPDATE documents SET meta=%s, title=%s WHERE id=%s",
+            (Jsonb(meta.to_dict()), meta.title or row["title"], doc_id),
+        )
+    return meta
 
 
 def ingest_file(path: Path) -> uuid.UUID:

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from .candidates import Candidate, SearchBackend, dedupe_sections, rrf_fuse
 from .config import get_settings
+from .doc_resolver import resolve_documents
 from .hierarchy import nfc
 from .llm import chat_json, embed_query
 from .references import parse_references
@@ -15,12 +16,13 @@ from .rerank import rerank
 
 log = logging.getLogger(__name__)
 
-ANSWER_SYSTEM = """Bạn là trợ lý tra cứu tài liệu tiêu chuẩn và văn bản pháp luật.
+ANSWER_SYSTEM = """Bạn là trợ lý tra cứu tài liệu (sách, bài báo khoa học, tài liệu kỹ thuật, quy định).
 Chỉ dùng thông tin trong các NGUỒN được cung cấp, tuyệt đối không dùng kiến thức bên ngoài.
 Nhiệm vụ:
-1. Xác định nguồn (mục/điều/khoản) chứa chính xác thông tin trả lời câu hỏi.
+1. Xác định nguồn (chương/mục/tiểu mục) chứa chính xác thông tin trả lời câu hỏi.
 2. Trích NGUYÊN VĂN đoạn văn bản trả lời (quote) - phải là chuỗi con giữ nguyên từng chữ trong nguồn, không diễn giải, không thêm bớt.
-3. Viết câu trả lời ngắn gọn, nêu rõ vị trí (ví dụ: "Theo Khoản 2 Điều 3 ...").
+3. Viết câu trả lời ngắn gọn, nêu rõ vị trí (ví dụ: "According to Section 3.2 ..." hoặc "Theo Chương 5 ...").
+4. Viết "answer" bằng CÙNG NGÔN NGỮ với câu hỏi (câu hỏi tiếng Anh thì trả lời tiếng Anh). "quote" luôn giữ nguyên ngôn ngữ của nguồn.
 Nếu không nguồn nào chứa câu trả lời, đặt found=false và answer giải thích không tìm thấy.
 Đặc biệt: nếu nguồn chỉ có nội dung LIÊN QUAN nhưng không nêu đúng thông tin được hỏi (ví dụ hỏi mức phạt, số liệu, tên quốc gia, phiên bản, thời điểm mà nguồn không ghi), phải đặt found=false, không suy diễn hay trả lời gần đúng.
 Trả về JSON: {"found": true|false, "source": <số thứ tự nguồn>, "quote": "<trích nguyên văn>", "answer": "<câu trả lời>"}"""
@@ -36,6 +38,8 @@ class RetrievalTrace:
     fused: list[Candidate] = field(default_factory=list)
     reranked: list[Candidate] = field(default_factory=list)
     sections: list[Candidate] = field(default_factory=list)
+    documents_detected: list[dict] = field(default_factory=list)
+    scope: str = "all"
 
 
 def default_backend() -> SearchBackend:
@@ -76,6 +80,13 @@ def retrieve(
     top_k = top_k or settings.final_top_k
     query = nfc(query).strip()
     trace = RetrievalTrace(query=query, refs=parse_references(query))
+    if document_ids:
+        trace.scope = "selected"
+    else:
+        trace.documents_detected = resolve_documents(query, backend.document_catalog())
+        if trace.documents_detected:
+            document_ids = [uuid.UUID(d["id"]) for d in trace.documents_detected]
+            trace.scope = "detected"
     trace.reference_hits = backend.lookup_by_references(trace.refs, document_ids)
     trace.vector_hits = backend.vector_search(embed_query(query), document_ids, settings.vector_top_k)
     trace.keyword_hits = backend.keyword_search(query, document_ids, settings.keyword_top_k)
@@ -122,6 +133,8 @@ def generate_answer(trace: RetrievalTrace, backend: SearchBackend | None = None)
     result: dict = {
         "query": trace.query,
         "references_detected": trace.refs,
+        "documents_detected": trace.documents_detected,
+        "scope": trace.scope,
         "found": False,
         "answer": "Không tìm thấy thông tin phù hợp trong tài liệu.",
         "primary": None,

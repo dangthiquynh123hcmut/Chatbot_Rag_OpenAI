@@ -3,12 +3,15 @@ import { api, errorMessage } from "../api.ts";
 import type { DocumentInfo, SectionDetail, SectionNode } from "../types.ts";
 import Breadcrumb from "./Breadcrumb.tsx";
 import Markdown from "./Markdown.tsx";
+import MetadataPanel from "./MetadataPanel.tsx";
 
-type Tab = "tree" | "md";
+type Tab = "tree" | "md" | "info";
 
 interface DocumentViewerProps {
   doc: DocumentInfo;
+  isAdmin: boolean;
   onClose: () => void;
+  onUpdated: (doc: DocumentInfo) => void;
 }
 
 function nodeLabel(s: SectionNode): string {
@@ -17,7 +20,7 @@ function nodeLabel(s: SectionNode): string {
   return s.kind === "md" ? s.title : `${label}. ${s.title}`;
 }
 
-export default function DocumentViewer({ doc, onClose }: DocumentViewerProps) {
+export default function DocumentViewer({ doc, isAdmin, onClose, onUpdated }: DocumentViewerProps) {
   const [tab, setTab] = useState<Tab>("tree");
   const [sections, setSections] = useState<SectionNode[]>([]);
   const [markdown, setMarkdown] = useState("");
@@ -70,13 +73,20 @@ export default function DocumentViewer({ doc, onClose }: DocumentViewerProps) {
             <button className={tab === "md" ? "active" : ""} onClick={() => setTab("md")}>
               Markdown
             </button>
+            <button className={tab === "info" ? "active" : ""} onClick={() => setTab("info")}>
+              Thông tin
+            </button>
           </div>
           <button className="close" onClick={onClose} aria-label="Đóng">
             ✕
           </button>
         </header>
         {error && <div className="error">{error}</div>}
-        {tab === "tree" ? (
+        {tab === "info" ? (
+          <div className="md-view">
+            <MetadataPanel doc={doc} isAdmin={isAdmin} onSaved={onUpdated} />
+          </div>
+        ) : tab === "tree" ? (
           <div className="viewer">
             <ul className="tree">
               {sections.map((s) => (

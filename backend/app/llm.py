@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
@@ -14,6 +15,32 @@ from .config import get_settings
 log = logging.getLogger(__name__)
 
 JSON_ONLY_SUFFIX = "\n\nChỉ trả về đúng một đối tượng JSON hợp lệ, không kèm giải thích hay markdown."
+NETWORK_BACKOFF_S = (2, 4, 8, 16, 30)
+TRANSIENT_ERRORS = {
+    "EndpointConnectionError",
+    "ConnectionClosedError",
+    "ReadTimeoutError",
+    "ConnectTimeoutError",
+    "APIConnectionError",
+    "APITimeoutError",
+}
+
+
+def is_transient_network_error(exc: Exception) -> bool:
+    return any(cls.__name__ in TRANSIENT_ERRORS for cls in type(exc).__mro__)
+
+
+def with_network_retry(fn, *args, **kwargs):
+    attempts = len(NETWORK_BACKOFF_S) + 1
+    for attempt in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if attempt == attempts - 1 or not is_transient_network_error(exc):
+                raise
+            delay = NETWORK_BACKOFF_S[attempt]
+            log.warning("Network error (%s), retry %d/%d in %ss", type(exc).__name__, attempt + 1, attempts - 1, delay)
+            time.sleep(delay)
 
 
 @lru_cache
@@ -31,7 +58,8 @@ def _openai_embed(texts: list[str], batch_size: int = 64) -> list[np.ndarray]:
     out: list[np.ndarray] = []
     for i in range(0, len(texts), batch_size):
         batch = [t[:24000] for t in texts[i : i + batch_size]]
-        resp = openai_client().embeddings.create(
+        resp = with_network_retry(
+            openai_client().embeddings.create,
             model=settings.embedding_model,
             input=batch,
             dimensions=settings.embedding_dim,
@@ -45,7 +73,8 @@ def _titan_embed_one(text: str) -> np.ndarray:
 
     settings = get_settings()
     body = {"inputText": text[:30000], "dimensions": settings.embedding_dim, "normalize": True}
-    resp = bedrock_runtime().invoke_model(
+    resp = with_network_retry(
+        bedrock_runtime().invoke_model,
         modelId=settings.bedrock_embedding_model,
         body=json.dumps(body),
         contentType="application/json",
@@ -70,8 +99,8 @@ def _cohere_embed(texts: list[str], input_type: str) -> list[np.ndarray]:
         if "embed-v4" in model:
             body["embedding_types"] = ["float"]
             body["output_dimension"] = settings.embedding_dim
-        resp = bedrock_runtime().invoke_model(
-            modelId=model, body=json.dumps(body), contentType="application/json", accept="application/json"
+        resp = with_network_retry(
+            bedrock_runtime().invoke_model, modelId=model, body=json.dumps(body), contentType="application/json", accept="application/json"
         )
         data = json.loads(resp["body"].read())
         vectors = data["embeddings"]
@@ -118,7 +147,8 @@ def _bedrock_chat_json(system: str, user: str, temperature: float, model: str | 
     from .aws import bedrock_runtime
 
     settings = get_settings()
-    resp = bedrock_runtime().converse(
+    resp = with_network_retry(
+        bedrock_runtime().converse,
         modelId=model or settings.bedrock_llm_model,
         system=[{"text": system + JSON_ONLY_SUFFIX}],
         messages=[{"role": "user", "content": [{"text": user}]}],
@@ -131,7 +161,8 @@ def _bedrock_chat_json(system: str, user: str, temperature: float, model: str | 
 
 def _openai_chat_json(system: str, user: str, temperature: float, model: str | None) -> str:
     settings = get_settings()
-    resp = openai_client().chat.completions.create(
+    resp = with_network_retry(
+        openai_client().chat.completions.create,
         model=model or settings.llm_model,
         temperature=temperature,
         max_tokens=settings.llm_max_tokens,

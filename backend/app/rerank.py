@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from .config import get_settings
-from .llm import chat_json
+from .llm import chat_json, with_network_retry
 
 if TYPE_CHECKING:
     from .candidates import Candidate
@@ -66,7 +66,8 @@ def _bedrock_rerank(query: str, cands: list[Candidate]) -> list[float]:
         }
         for c in cands
     ]
-    resp = bedrock_agent_runtime().rerank(
+    resp = with_network_retry(
+        bedrock_agent_runtime().rerank,
         queries=[{"type": "TEXT", "textQuery": {"text": query}}],
         sources=sources,
         rerankingConfiguration={

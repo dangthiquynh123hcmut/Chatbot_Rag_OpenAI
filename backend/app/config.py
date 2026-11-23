@@ -54,6 +54,13 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:5173"
 
+    jwt_secret: str = ""
+    jwt_expire_minutes: int = 720
+    allow_registration: bool = True
+    min_password_length: int = 8
+
+    metadata_llm: bool = True
+
     @model_validator(mode="after")
     def _check(self) -> "Settings":
         self.llm_provider = self.llm_provider.strip().lower()

@@ -136,6 +136,44 @@ def cmd_eval_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_extract_metadata(args: argparse.Namespace) -> None:
+    import uuid as _uuid
+
+    from .db import connection, init_db
+    from .ingest import refresh_metadata
+    from .metadata import display_label
+
+    init_db()
+    with connection() as conn:
+        if args.doc:
+            rows = conn.execute("SELECT id FROM documents WHERE id=%s", (_uuid.UUID(args.doc),)).fetchall()
+        else:
+            rows = conn.execute("SELECT id FROM documents WHERE status='ready' ORDER BY created_at").fetchall()
+    upload_dir = get_settings().upload_dir
+    for r in rows:
+        stored = next(iter(upload_dir.glob(f"{r['id']}_*")), None)
+        meta = refresh_metadata(r["id"], stored, force=args.force)
+        if meta is None:
+            continue
+        print(f"{r['id']}  [{meta.source}] {display_label(meta, meta.title)}  aliases={meta.aliases}")
+    print("Chạy 'reindex' cho từng tài liệu nếu muốn cập nhật ngữ cảnh tiêu đề/tác giả trong embedding.")
+
+
+def cmd_create_user(args: argparse.Namespace) -> None:
+    import getpass
+
+    from .auth import UserError, create_user
+    from .db import init_db
+
+    init_db()
+    password = args.password or getpass.getpass("Mật khẩu: ")
+    try:
+        user = create_user(args.username, password, args.display_name, "admin" if args.admin else "user")
+    except UserError as exc:
+        sys.exit(str(exc))
+    print(f"Đã tạo tài khoản {user['username']} (role={user['role']})")
+
+
 def cmd_check_aws(args: argparse.Namespace) -> None:
     from .aws import caller_identity, rerank_model_arn
     from .llm import chat_json, embed_query
@@ -232,6 +270,16 @@ def main() -> None:
     p.add_argument("--out-dir", default="../eval/reports")
     p.add_argument("--strict", action="store_true", help="Exit non-zero if any threshold fails")
     p.set_defaults(func=cmd_eval_run)
+    p = sub.add_parser("extract-metadata", help="(Re)extract document metadata without re-embedding")
+    p.add_argument("--doc", help="Document id (default: all ready documents)")
+    p.add_argument("--force", action="store_true", help="Also overwrite metadata edited manually")
+    p.set_defaults(func=cmd_extract_metadata)
+    p = sub.add_parser("create-user", help="Create a login account")
+    p.add_argument("username")
+    p.add_argument("--password", help="Omit to be prompted")
+    p.add_argument("--display-name")
+    p.add_argument("--admin", action="store_true")
+    p.set_defaults(func=cmd_create_user)
     p = sub.add_parser("check-aws", help="Verify IAM credentials and Bedrock model access")
     p.add_argument("--all", action="store_true", help="Also test Bedrock rerank even if RERANKER is not bedrock")
     p.set_defaults(func=cmd_check_aws)

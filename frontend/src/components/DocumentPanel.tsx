@@ -14,9 +14,17 @@ interface DocumentPanelProps {
   onToggle: (id: string) => void;
   onRefresh: () => Promise<void>;
   onOpen: (doc: DocumentInfo) => void;
+  isAdmin: boolean;
 }
 
-export default function DocumentPanel({ documents, selected, onToggle, onRefresh, onOpen }: DocumentPanelProps) {
+export default function DocumentPanel({
+  documents,
+  selected,
+  onToggle,
+  onRefresh,
+  onOpen,
+  isAdmin,
+}: DocumentPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -64,26 +72,28 @@ export default function DocumentPanel({ documents, selected, onToggle, onRefresh
   return (
     <aside className="panel docs">
       <h2>Tài liệu</h2>
-      <div
-        className={`dropzone ${dragOver ? "over" : ""}`}
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-      >
-        {uploading ? "Đang tải lên…" : "Kéo thả hoặc bấm để chọn PDF / DOCX"}
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".pdf,.docx"
-          hidden
-          onChange={(e) => void upload(e.target.files)}
-        />
-      </div>
+      {isAdmin && (
+        <div
+          className={`dropzone ${dragOver ? "over" : ""}`}
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+        >
+          {uploading ? "Đang tải lên…" : "Kéo thả hoặc bấm để chọn PDF / DOCX"}
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept=".pdf,.docx"
+            hidden
+            onChange={(e) => void upload(e.target.files)}
+          />
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
       <p className="hint">
         {selected.length ? `Đang lọc theo ${selected.length} tài liệu` : "Tìm trên tất cả tài liệu"}
@@ -102,6 +112,13 @@ export default function DocumentPanel({ documents, selected, onToggle, onRefresh
                 {d.title}
               </span>
             </label>
+            {d.meta && (d.meta.authors.length > 0 || d.meta.year) && (
+              <div className="doc-byline">
+                {[d.meta.authors.slice(0, 3).join(", ") + (d.meta.authors.length > 3 ? " et al." : ""), d.meta.year]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </div>
+            )}
             <div className="doc-meta">
               <span className={`badge ${d.status}`}>{STATUS_LABEL[d.status] ?? d.status}</span>
               {d.status === "ready" && (
@@ -115,15 +132,19 @@ export default function DocumentPanel({ documents, selected, onToggle, onRefresh
               <button disabled={d.status !== "ready"} onClick={() => onOpen(d)}>
                 Xem cấu trúc
               </button>
-              <button
-                disabled={d.status === "processing"}
-                onClick={() => void runAction(() => api.reindexDocument(d.id))}
-              >
-                Xử lý lại
-              </button>
-              <button className="danger" onClick={() => remove(d)}>
-                Xóa
-              </button>
+              {isAdmin && (
+                <>
+                  <button
+                    disabled={d.status === "processing"}
+                    onClick={() => void runAction(() => api.reindexDocument(d.id))}
+                  >
+                    Xử lý lại
+                  </button>
+                  <button className="danger" onClick={() => remove(d)}>
+                    Xóa
+                  </button>
+                </>
+              )}
             </div>
           </li>
         ))}

@@ -1,4 +1,4 @@
-# Hierarchy-Aware RAG cho tài liệu tiêu chuẩn & văn bản luật
+# Hierarchy-Aware RAG cho tài liệu tiêu chuẩn
 
 Hệ thống hỏi đáp trên tài liệu **PDF / DOCX** dài, phân tầng rõ ràng (Phần → Chương → Mục → Tiểu mục → Điều → Khoản → Điểm, hoặc kiểu giáo trình I. → 1. → 1.1 → a)).
 Mục tiêu: từ câu hỏi, trả về **chính xác nguyên văn một tiêu mục cụ thể** trong tài liệu, kèm đường dẫn vị trí.
@@ -102,6 +102,10 @@ python -m app.cli ask "Khoản 2 Điều 3 quy định gì?"
 ### Test
 ```powershell
 cd backend; pip install -r requirements-dev.txt; python -m pytest -q tests
+```
+Trên máy Windows bị Application Control chặn thư viện native (`pydantic_core`, `psycopg`…), chạy test trong container:
+```powershell
+docker compose --profile full run --rm --no-deps -v ${PWD}/backend/tests:/app/tests -e ENABLE_OCR=false backend sh -c "pip install -q pytest==9.2.0 && python -m pytest -q tests"
 ```
 
 ## Audit chất lượng nạp tài liệu & embedding
@@ -210,20 +214,77 @@ Lệnh gọi STS, embedding, Converse và Rerank với câu mẫu ngắn và bá
 - Khi chạy backend bằng Docker (`--profile full`), thư mục `~/.aws` được mount read-only vào container; đặt `AWS_DIR` nếu nằm chỗ khác.
 - Mọi lệnh gọi Converse đều đặt `maxTokens` (`LLM_MAX_TOKENS`) để tránh giữ chỗ quota quá mức, client dùng adaptive retry.
 
+## Đăng nhập & lịch sử chat
+
+- Tài khoản lưu trong bảng `users`; mật khẩu băm bằng **scrypt** (thư viện chuẩn Python, không cần thư viện native), phiên đăng nhập là **JWT** (HS256) gửi qua header `Authorization: Bearer …`.
+- **Người đăng ký đầu tiên tự động là `admin`**, những người sau là `user`.
+- Quyền: mọi API trừ `/api/health` và `/api/auth/*` đều cần đăng nhập; **upload / xử lý lại / xóa tài liệu chỉ admin** được làm. Người dùng thường chỉ xem tài liệu và hỏi đáp.
+- Mỗi người chỉ thấy hội thoại của mình (truy cập hội thoại người khác trả 404). Câu trả lời được lưu kèm toàn bộ kết quả (mục chính xác, trích dẫn, nguồn sau rerank) nên mở lại hội thoại cũ hiển thị đầy đủ như lúc hỏi. Tiêu đề hội thoại tự lấy từ câu hỏi đầu tiên, có thể đổi tên / xóa.
+
+Cấu hình trong `.env`:
+
+| Biến | Mặc định | Ý nghĩa |
+| --- | --- | --- |
+| `JWT_SECRET` | (trống) | Khóa ký token. **Bắt buộc đặt** – nếu trống, backend sinh khóa ngẫu nhiên và mọi người bị đăng xuất mỗi lần khởi động lại |
+| `JWT_EXPIRE_MINUTES` | 720 | Thời hạn phiên đăng nhập |
+| `ALLOW_REGISTRATION` | true | `false` để chỉ admin tạo tài khoản (tài khoản đầu tiên vẫn đăng ký được) |
+| `MIN_PASSWORD_LENGTH` | 8 | Độ dài mật khẩu tối thiểu |
+
+Tạo khóa ngẫu nhiên:
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Tạo tài khoản bằng dòng lệnh (khi tắt tự đăng ký):
+```powershell
+docker compose --profile full exec backend python -m app.cli create-user ten_dang_nhap --display-name "Họ Tên"
+```
+Thêm `--admin` để cấp quyền quản trị.
+
+## Metadata tài liệu & tự giới hạn phạm vi tìm kiếm
+
+Khi nạp tài liệu, hệ thống trích metadata (lưu ở cột `documents.meta`):
+
+| Nguồn | Lấy được |
+| --- | --- |
+| Regex trên nội dung | DOI, arXiv ID, ISBN |
+| Metadata nhúng trong PDF | Tiêu đề, tác giả (bỏ giá trị rác kiểu "Microsoft Word - …") |
+| LLM đọc ~8.000 ký tự đầu (trang tiêu đề, abstract, trang bản quyền) | Tiêu đề, tên ngắn, tác giả, năm, loại (`paper`/`book`/`report`/`manual`), nơi xuất bản, tên gọi khác, tóm tắt 1 câu |
+
+Metadata được dùng ở 2 chỗ:
+1. **Ngữ cảnh embedding**: mỗi chunk mở đầu bằng `Tài liệu: Attention Is All You Need (Vaswani et al., 2017)` thay vì tên file.
+2. **Tự giới hạn phạm vi**: nếu câu hỏi nhắc tới tài liệu – tiêu đề, tên ngắn/tên gọi khác ("the Transformer paper"), tác giả ("Vaswani et al.", "Vaswani 2017", "Robert C. Martin"), DOI/arXiv/ISBN – hệ thống chỉ tìm trong tài liệu đó (kết quả có `scope: "detected"` và `documents_detected`). Người dùng tự chọn tài liệu thì lựa chọn đó được ưu tiên (`scope: "selected"`); không nhắc gì thì tìm toàn bộ (`scope: "all"`).
+
+Chống nhận nhầm: tên gọi một từ chỉ được chấp nhận khi là viết tắt (BERT), CamelCase (ResNet) hoặc chính là tiêu đề một từ; tiêu đề một từ ("Refactoring") chỉ khớp khi viết hoa và không đứng đầu câu, nên "When is refactoring worth it?" không bị gán cho cuốn sách.
+
+Sửa metadata: admin mở tài liệu → tab **Thông tin** → **Sửa metadata** (hoặc `PATCH /api/documents/{id}/metadata`). Metadata sửa tay được đánh dấu `manual`, không bị ghi đè khi xử lý lại; nhận diện trong câu hỏi dùng ngay, còn ngữ cảnh embedding cập nhật sau khi bấm **Xử lý lại**.
+
+Bổ sung metadata cho tài liệu đã nạp trước đây (không embedding lại):
+```powershell
+docker compose --profile full exec backend python -m app.cli extract-metadata
+```
+Thêm `--doc <id>` cho một tài liệu, `--force` để ghi đè cả metadata đã sửa tay. Đặt `METADATA_LLM=false` để chỉ dùng regex + metadata PDF (không gọi LLM).
+
 ## API chính
 
-| Method | Endpoint | Mô tả |
-| --- | --- | --- |
-| POST | `/api/documents` | Upload PDF/DOCX (multipart `files`), xử lý nền |
-| GET | `/api/documents` | Danh sách tài liệu + trạng thái |
-| GET | `/api/documents/{id}/tree` | Cây phân tầng |
-| GET | `/api/documents/{id}/markdown` | Markdown đã chuẩn hóa |
-| GET | `/api/sections/{id}` | Toàn văn một mục |
-| POST | `/api/documents/{id}/reindex` | Xử lý lại |
-| DELETE | `/api/documents/{id}` | Xóa |
-| POST | `/api/query` | `{"query": "...", "document_ids": [...], "top_k": 5}` |
+| Method | Endpoint | Quyền | Mô tả |
+| --- | --- | --- | --- |
+| POST | `/api/auth/register` | – | `{"username", "password", "display_name"}` → token |
+| POST | `/api/auth/login` | – | `{"username", "password"}` → `{"access_token", "user"}` |
+| GET | `/api/auth/me` | user | Thông tin người dùng hiện tại |
+| GET | `/api/conversations` | user | Danh sách hội thoại của mình |
+| POST | `/api/conversations` | user | Tạo hội thoại |
+| GET | `/api/conversations/{id}` | user | Hội thoại kèm toàn bộ tin nhắn |
+| PATCH / DELETE | `/api/conversations/{id}` | user | Đổi tên / xóa |
+| POST | `/api/conversations/{id}/messages` | user | `{"query", "document_ids"}` → hỏi, lưu câu hỏi + câu trả lời |
+| GET | `/api/documents`, `/api/documents/{id}/tree`, `/markdown`, `/api/sections/{id}` | user | Xem tài liệu |
+| POST | `/api/documents` | admin | Upload PDF/DOCX (multipart `files`), xử lý nền |
+| POST | `/api/documents/{id}/reindex` | admin | Xử lý lại |
+| DELETE | `/api/documents/{id}` | admin | Xóa |
+| PATCH | `/api/documents/{id}/metadata` | admin | Sửa metadata (tiêu đề, tác giả, năm, DOI/ISBN, tên gọi khác…) |
+| POST | `/api/query` | user | Hỏi không lưu lịch sử: `{"query", "document_ids", "top_k"}` |
 
-Kết quả `/api/query` gồm `answer`, `primary` (mục chính xác: `path`, `content` nguyên văn, `quote`, `quote_verified`) và `sources` (các mục sau rerank kèm điểm vector / keyword / RRF / rerank).
+Kết quả `/api/query` (và trường `result` của tin nhắn trả lời) gồm `answer`, `primary` (mục chính xác: `path`, `content` nguyên văn, `quote`, `quote_verified`) và `sources` (các mục sau rerank kèm điểm vector / keyword / RRF / rerank).
 
 ## Xử lý sự cố
 
@@ -239,6 +300,13 @@ Windows (Smart App Control / Application Control) chặn các DLL chưa ký củ
 docker compose --profile full up -d --build
 ```
 API: http://localhost:8000/docs. Khi sửa code backend, build lại bằng lệnh trên.
+
+### `npm run dev` báo `An Application Control policy has blocked this file … rollup.win32-x64-msvc.node`
+Cùng nguyên nhân với `psycopg`: Windows chặn binary native chưa ký của rollup/esbuild. `package.json` đã dùng `overrides` để thay bằng bản WebAssembly (`@rollup/wasm-node`, `esbuild-wasm`), nên không còn file native nào. Nếu đã cài từ trước, cài lại sạch:
+```powershell
+cd frontend; Remove-Item -Recurse -Force node_modules, package-lock.json; npm install
+```
+esbuild-wasm xóa biến môi trường (kể cả `SystemRoot`) trước khi chạy, làm OpenSSL của Node 26 không lấy được entropy (`ERR_OSSL_ENTROPY_SOURCE_STRENGTH_TOO_WEAK`). Các script `dev`/`build`/`preview` nạp trước `scripts/seed-entropy.cjs` để khởi tạo bộ sinh số ngẫu nhiên trước bước đó – luôn chạy qua `npm run …`, không gọi `vite` trực tiếp.
 
 ### Container gọi Bedrock bị `ReadTimeoutError`
 Triệu chứng: request nhỏ thì được, payload vài KB trở lên treo. Nguyên nhân là MTU: đường mạng thực tế nhỏ hơn 1500 nhưng NAT của Docker/WSL không tự dò được, gói lớn bị rớt. `docker-compose.yml` đặt MTU mạng Docker = 1400 (đổi bằng biến `DOCKER_MTU` trong `.env`, ví dụ 1300 nếu vẫn lỗi). Sau khi đổi:

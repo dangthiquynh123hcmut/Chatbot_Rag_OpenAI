@@ -12,6 +12,9 @@ REF_PATTERNS = [
     ("article", re.compile(r"\bđiều\s+(\d+[a-zđ]?)(?![\w.])", re.IGNORECASE)),
     ("clause", re.compile(r"\bkhoản\s+(\d+)(?![\w.])", re.IGNORECASE)),
     ("point", re.compile(r"\bđiểm\s+([a-zđ])(?![\w])", re.IGNORECASE)),
+    ("part", re.compile(r"\bpart\s+([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
+    ("chapter", re.compile(r"\b(?:chapter|chap\.|ch\.)\s*([ivxlcdm]+|\d+)(?![\w.])", re.IGNORECASE)),
+    ("section", re.compile(r"(?:\bsection|\bsec\.|§)\s*(\d+)(?![\w.])", re.IGNORECASE)),
 ]
 DOTTED_RE = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3})+)(?![\w]|\.\d)")
 STRONG_KEYS = {"part", "chapter", "section", "subsection", "article", "num", "roman"}
@@ -19,6 +22,15 @@ STOPWORDS = {
     "là", "gì", "của", "và", "các", "những", "có", "được", "cho", "trong", "về", "theo", "nào",
     "thế", "như", "này", "đó", "với", "the", "of", "and", "what", "is", "a", "an", "to", "in",
     "quy", "định", "nội", "dung", "hỏi", "hãy", "cho", "biết", "tôi",
+    "about", "above", "after", "again", "all", "also", "am", "are", "as", "at", "be", "been", "being",
+    "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing", "during", "each", "explain",
+    "for", "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "him", "his",
+    "how", "i", "if", "into", "it", "its", "itself", "me", "more", "most", "my", "no", "nor", "not", "now",
+    "on", "once", "only", "or", "other", "our", "ours", "out", "over", "own", "please", "same", "say", "says",
+    "she", "should", "so", "some", "such", "tell", "than", "that", "their", "theirs", "them", "then", "there",
+    "these", "they", "this", "those", "through", "too", "under", "until", "up", "very", "was", "we", "were",
+    "when", "where", "which", "while", "who", "whom", "why", "will", "with", "would", "you", "your", "yours",
+    "according", "describe", "described", "mean", "means", "book", "paper", "author", "authors",
 }
 
 
@@ -36,7 +48,7 @@ def parse_references(query: str) -> dict[str, str]:
     refs: dict[str, str] = {}
     for kind, rx in REF_PATTERNS:
         m = rx.search(query)
-        if m:
+        if m and kind not in refs:
             refs[kind] = _norm_ref(kind, m.group(1))
     m = DOTTED_RE.search(query)
     if m:

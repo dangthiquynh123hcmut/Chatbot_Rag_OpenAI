@@ -14,7 +14,9 @@ import numpy as np
 from ..candidates import Candidate, keyword_terms
 from ..config import get_settings
 from ..converters import SUPPORTED_EXTENSIONS, convert_to_markdown
-from ..hierarchy import Node, build_chunks, embedding_text, parse_markdown
+from ..doc_resolver import CatalogEntry
+from ..hierarchy import Node, build_chunks, embedding_text, parse_markdown, tree_to_markdown
+from ..metadata import DocMeta, find_identifiers, pdf_info
 from ..llm import embed_texts
 from ..references import STRONG_KEYS, ref_variants
 
@@ -99,6 +101,7 @@ class MemoryBackend:
         self.by_node: dict[int, MemSection] = {}
         self.chunks: list[MemChunk] = []
         self.doc_ids: dict[str, uuid.UUID] = {}
+        self.catalog: list[CatalogEntry] = []
         self.matrix = np.zeros((0, 1), dtype=np.float32)
         self.df: Counter = Counter()
         self.avg_len = 1.0
@@ -113,6 +116,8 @@ class MemoryBackend:
             title, root = load_document(path)
             doc_id = uuid.uuid5(uuid.NAMESPACE_URL, f"file:{path.name}")
             be.doc_ids[path.name] = doc_id
+            meta = DocMeta.from_dict({"title": title, **pdf_info(path), **find_identifiers(tree_to_markdown(root)[:20000])})
+            be.catalog.append(CatalogEntry(str(doc_id), title, meta))
             for n in root.iter():
                 sid = uuid.uuid5(doc_id, f"section:{n.order}")
                 is_root = n.kind == "document"
@@ -141,6 +146,9 @@ class MemoryBackend:
 
     def document_ids_by_filename(self) -> dict[str, uuid.UUID]:
         return dict(self.doc_ids)
+
+    def document_catalog(self) -> list[CatalogEntry]:
+        return list(self.catalog)
 
     def _allowed(self, sec: MemSection, document_ids: list[uuid.UUID] | None) -> bool:
         return not document_ids or sec.document_id in document_ids
