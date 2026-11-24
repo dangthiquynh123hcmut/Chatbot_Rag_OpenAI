@@ -294,6 +294,32 @@ def check_chunks(root: Node, max_chars: int, overlap: int) -> Check:
                   "split_parts": split, "violations": len(violations)})
 
 
+def check_toc(path: Path, root: Node) -> Check:
+    from .docling_pdf import norm_title, read_toc
+
+    toc = read_toc(path) if path.suffix.lower() == ".pdf" else []
+    if not toc:
+        return Check("Khớp mục lục nhúng", "info", "PDF không có mục lục nhúng (bookmarks) – bỏ qua")
+    found = {norm_title(n.heading or n.title) for n in root.iter() if n.kind != "document"}
+    found |= {norm_title(n.title) for n in root.iter() if n.kind != "document" and n.title}
+    missed = [f"cấp {lvl} – {title} (trang {page})" for lvl, title, page in toc if norm_title(title) not in found]
+    recall = 1 - len(missed) / len(toc)
+    return Check("Khớp mục lục nhúng", _status(recall, 0.95, 0.8),
+                 f"{len(toc) - len(missed)}/{len(toc)} mục trong mục lục có trong cây mục ({recall:.0%})",
+                 missed, {"toc_entries": len(toc), "toc_recall": round(recall, 4)})
+
+
+MARKUP_RE = re.compile(r"<(br|sup|sub|u|span)\b[^>]*>|picture text|formula-not-decoded", re.IGNORECASE)
+
+
+def check_markup(markdown: str) -> Check:
+    hits = MARKUP_RE.findall(markdown)
+    lines = [ln.strip()[:100] for ln in markdown.splitlines() if MARKUP_RE.search(ln)]
+    status = "pass" if not hits else ("warn" if len(hits) < 20 else "fail")
+    return Check("Thẻ HTML / chữ OCR trong hình còn sót", status,
+                 f"{len(hits)} chỗ" if hits else "Không có", lines[:10], {"markup_hits": len(hits)})
+
+
 def audit_file(path: Path) -> AuditReport:
     settings = get_settings()
     raw_pages, source_tables = extract_source(path)
@@ -308,6 +334,8 @@ def audit_file(path: Path) -> AuditReport:
         check_text_quality(canonical),
         check_coverage(raw_pages, canonical),
         check_tables(source_tables, canonical),
+        check_toc(path, root),
+        check_markup(canonical),
         check_sequences(root),
         check_missed_headings(root),
         check_section_sizes(root, settings.chunk_max_chars),

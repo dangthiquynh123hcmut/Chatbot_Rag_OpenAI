@@ -66,7 +66,7 @@ export default function ChatView({ messages, loading, sending, error, filterCoun
         {!loading && messages.length === 0 && (
           <div className="empty-chat">
             <h2>Hỏi về nội dung tài liệu</h2>
-            <p className="hint">Hệ thống trả về đúng chương/mục kèm trích dẫn nguyên văn. Nhắc tên tài liệu, tác giả ("Vaswani et al.") hoặc DOI/ISBN để chỉ tìm trong tài liệu đó.</p>
+            <p className="hint">Hệ thống trả về đúng chương/mục kèm trích dẫn nguyên văn. Nhắc tên tài liệu, tác giả ("Vaswani et al.") hoặc ISBN để chỉ tìm trong tài liệu đó.</p>
             <div className="examples">
               {EXAMPLES.map((ex) => (
                 <button key={ex} onClick={() => void submit(ex)} disabled={sending}>

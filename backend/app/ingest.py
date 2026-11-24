@@ -21,8 +21,8 @@ def create_document(filename: str) -> uuid.UUID:
     title = Path(filename).stem.replace("_", " ").strip()
     with connection() as conn:
         conn.execute(
-            "INSERT INTO documents (id, filename, file_type, title, status) VALUES (%s, %s, %s, %s, 'processing')",
-            (doc_id, filename, Path(filename).suffix.lower().lstrip("."), title),
+            "INSERT INTO documents (id, filename, title, status) VALUES (%s, %s, %s, 'processing')",
+            (doc_id, filename, title),
         )
     return doc_id
 
@@ -40,7 +40,7 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
         if row is None:
             return
 
-        raw_md = convert_to_markdown(path)
+        raw_md = convert_to_markdown(path, str(doc_id))
         meta = DocMeta.from_dict(row["meta"])
         if meta.source != "manual":
             meta = extract_metadata(path, raw_md, row["filename"], use_llm=settings.metadata_llm)
@@ -55,7 +55,6 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
             raise ValueError("Tài liệu không có nội dung để lập chỉ mục.")
         embed_inputs = [embedding_text(label, c.node, c.content) for c in chunks]
         vectors = embed_texts(embed_inputs)
-        embedding_model = f"{settings.llm_provider}:{settings.active_embedding_model}:{settings.embedding_dim}"
 
         node_ids = {id(n): uuid.uuid4() for n in root.iter()}
         section_rows = []
@@ -68,18 +67,16 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                     n.order,
                     n.depth,
                     n.kind,
-                    n.number,
                     n.label if n.kind != "document" else PREAMBLE,
                     n.title,
                     n.heading,
                     n.path if n.kind != "document" else [PREAMBLE],
                     Jsonb(n.refs),
-                    n.own_text,
                     n.full_markdown() if n.kind != "document" else n.own_text,
                 )
             )
         chunk_rows = [
-            (uuid.uuid4(), doc_id, node_ids[id(c.node)], c.part, c.content, et, v, embedding_model)
+            (uuid.uuid4(), doc_id, node_ids[id(c.node)], c.part, c.content, et, v)
             for c, et, v in zip(chunks, embed_inputs, vectors)
         ]
 
@@ -88,14 +85,14 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                 conn.execute("DELETE FROM sections WHERE document_id=%s", (doc_id,))
                 with conn.cursor() as cur:
                     cur.executemany(
-                        """INSERT INTO sections (id, document_id, parent_id, ord, depth, kind, number, label,
-                           title, heading, path, refs, content_md, full_md)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        """INSERT INTO sections (id, document_id, parent_id, ord, depth, kind, label,
+                           title, heading, path, refs, full_md)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         section_rows,
                     )
                     cur.executemany(
-                        """INSERT INTO chunks (id, document_id, section_id, part, content, embed_text, embedding,
-                           embedding_model) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        """INSERT INTO chunks (id, document_id, section_id, part, content, embed_text, embedding)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                         chunk_rows,
                     )
                 conn.execute(

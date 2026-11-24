@@ -24,7 +24,7 @@ def _documents(doc_id: uuid.UUID | None) -> list[dict]:
 def _chunk_rows(doc_id: uuid.UUID) -> list[dict]:
     with connection() as conn:
         return conn.execute(
-            """SELECT c.id, c.content, c.embedding, c.embedding_model, s.full_md, s.path, s.kind
+            """SELECT c.id, c.content, c.embedding, s.full_md, s.path, s.kind
                FROM chunks c JOIN sections s ON s.id = c.section_id WHERE c.document_id=%s""",
             (doc_id,),
         ).fetchall()
@@ -38,7 +38,6 @@ def _to_array(value) -> np.ndarray:
 
 def check_vectors(rows: list[dict]) -> list[Check]:
     s = get_settings()
-    expected_model = f"{s.llm_provider}:{s.active_embedding_model}:{s.embedding_dim}"
     vecs = [_to_array(r["embedding"]) for r in rows]
     dims = {v.shape[0] for v in vecs}
     bad = [i for i, v in enumerate(vecs) if not np.all(np.isfinite(v))]
@@ -61,15 +60,6 @@ def check_vectors(rows: list[dict]) -> list[Check]:
     checks.append(Check("Độ dài vector (norm)", norm_status,
                         f"min {norms.min():.4f}, max {norms.max():.4f}, TB {norms.mean():.4f}",
                         metrics={"norm_min": float(norms.min()), "norm_max": float(norms.max())}))
-
-    models = {r["embedding_model"] for r in rows}
-    if models == {expected_model}:
-        m_status, m_sum = "pass", expected_model
-    elif None in models and len(models) == 1:
-        m_status, m_sum = "warn", "Chưa ghi embedding_model (dữ liệu nạp trước khi có cột này) – nên xử lý lại"
-    else:
-        m_status, m_sum = "fail", f"Lẫn nhiều model {sorted(map(str, models))}, cấu hình hiện tại {expected_model}"
-    checks.append(Check("Nhất quán model embedding", m_status, m_sum))
 
     by_hash: dict[str, list[int]] = {}
     for i, v in enumerate(vecs):

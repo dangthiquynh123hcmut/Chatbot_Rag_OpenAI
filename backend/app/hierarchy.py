@@ -24,6 +24,9 @@ NUMBER_RE = re.compile(r"^(\d{1,3})\s*[.)]\s+(\S.*)$")
 MARKED_NUMBER_RE = re.compile(r"^(\d{1,3})\s+([^\d\s].{0,200})$")
 POINT_RE = re.compile(r"^([a-z])\s*\)\s+(\S.*)$")
 MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+ATOMIC_LINE_PREFIXES = ("|", "$$", "![")
+FIGURE_MD_RE = re.compile(r"!\[([^\]]*)\]\(figure://[^)]+\)")
 
 KIND_LABELS = {
     "part": "Part",
@@ -380,8 +383,19 @@ class HierarchyParser:
 
     def feed(self, lines: list[str]) -> Node:
         i, n = 0, len(lines)
+        in_fence = False
         while i < n:
             raw_line = lines[i]
+            if in_fence or FENCE_RE.match(raw_line):
+                if FENCE_RE.match(raw_line):
+                    in_fence = not in_fence
+                self.stack[-1].lines.append(raw_line.rstrip())
+                i += 1
+                continue
+            if raw_line.lstrip().startswith(ATOMIC_LINE_PREFIXES):
+                self.stack[-1].lines.append(raw_line.strip())
+                i += 1
+                continue
             text, marked = clean_line(raw_line)
             if not text:
                 self.stack[-1].lines.append("")
@@ -432,8 +446,14 @@ class HierarchyParser:
         return self.root
 
     def _tidy(self, node: Node) -> None:
-        cleaned, blank = [], False
+        cleaned, blank, in_fence = [], False, False
         for ln in node.lines:
+            if FENCE_RE.match(ln):
+                in_fence = not in_fence
+            if in_fence and not FENCE_RE.match(ln):
+                cleaned.append(ln)
+                blank = False
+                continue
             if not ln.strip():
                 if cleaned and not blank:
                     cleaned.append("")
@@ -470,11 +490,58 @@ class Chunk:
     content: str
 
 
+def atomic_blocks(text: str) -> list[str]:
+    blocks: list[str] = []
+    current: list[str] = []
+    in_fence = False
+    for line in text.split("\n"):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            current.append(line)
+            continue
+        if not in_fence and not line.strip():
+            if current:
+                blocks.append("\n".join(current).strip())
+                current = []
+            continue
+        current.append(line)
+    if current:
+        blocks.append("\n".join(current).strip())
+    return [b for b in blocks if b]
+
+
+def is_table_block(block: str) -> bool:
+    lines = block.split("\n")
+    return len(lines) >= 2 and all(ln.lstrip().startswith("|") for ln in lines)
+
+
+def split_table(block: str, max_chars: int) -> list[str]:
+    lines = block.split("\n")
+    header, body = lines[:2], lines[2:]
+    head_len = sum(len(h) + 1 for h in header)
+    parts, cur, size = [], [], head_len
+    for row in body:
+        if cur and size + len(row) + 1 > max_chars:
+            parts.append("\n".join(header + cur))
+            cur, size = [], head_len
+        cur.append(row)
+        size += len(row) + 1
+    if cur or not parts:
+        parts.append("\n".join(header + cur))
+    return parts
+
+
 def split_paragraphs(text: str, max_chars: int, overlap: int) -> list[str]:
-    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    paras = atomic_blocks(text)
     units: list[str] = []
     for p in paras:
         if len(p) <= max_chars:
+            units.append(p)
+            continue
+        if is_table_block(p):
+            units.extend(split_table(p, max_chars))
+            continue
+        if FENCE_RE.match(p) or p.startswith("$$") or p.startswith("!["):
             units.append(p)
             continue
         sentences = re.split(r"(?<=[.!?;…])\s+", p)
@@ -546,4 +613,5 @@ def build_chunks(root: Node, max_chars: int = 2000, overlap: int = 1) -> list[Ch
 
 def embedding_text(doc_title: str, node: Node, content: str) -> str:
     path = " > ".join(node.path) if node.kind != "document" else PREAMBLE
+    content = FIGURE_MD_RE.sub(lambda m: f"[Figure: {m.group(1)}]", content)
     return f"Document: {doc_title}\nLocation: {path}\n\n{content}"

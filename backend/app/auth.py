@@ -4,15 +4,18 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from sqlalchemy import and_, delete, func, or_, select, text, update
 
 from .config import get_settings
-from .db import connection
+from .db import session_scope
+from .models import AuthSession, RefreshToken, User
 from .security import (
     create_access_token,
     decode_access_token,
@@ -25,7 +28,6 @@ from .security import (
 log = logging.getLogger(__name__)
 
 USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,40}$")
-USER_COLS = "id, username, display_name, role, created_at, last_login_at"
 REFRESH_COOKIE = "rag_refresh"
 REFRESH_COOKIE_PATH = "/api/auth"
 
@@ -73,18 +75,20 @@ def check_password_policy(password: str) -> None:
 def create_user(username: str, password: str, display_name: str | None = None, role: str | None = None) -> dict:
     name = normalize_username(username)
     check_password_policy(password)
-    with connection() as conn:
-        with conn.transaction():
-            conn.execute("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
-            if conn.execute("SELECT 1 FROM users WHERE username=%s", (name,)).fetchone():
-                raise UserError("Tên đăng nhập đã tồn tại.")
-            first = conn.execute("SELECT count(*) AS n FROM users").fetchone()["n"] == 0
-            final_role = role or ("admin" if first else "user")
-            return conn.execute(
-                f"""INSERT INTO users (id, username, password_hash, display_name, role)
-                    VALUES (%s, %s, %s, %s, %s) RETURNING {USER_COLS}""",
-                (uuid.uuid4(), name, hash_password(password), (display_name or "").strip() or name, final_role),
-            ).fetchone()
+    with session_scope() as db:
+        db.execute(text("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE"))
+        if db.scalar(select(User.id).where(User.username == name)) is not None:
+            raise UserError("Tên đăng nhập đã tồn tại.")
+        first = db.scalar(select(func.count()).select_from(User)) == 0
+        user = User(
+            username=name,
+            password_hash=hash_password(password),
+            display_name=(display_name or "").strip() or name,
+            role=role or ("admin" if first else "user"),
+        )
+        db.add(user)
+        db.flush()
+        return user.to_dict()
 
 
 def authenticate(username: str, password: str) -> dict | None:
@@ -92,117 +96,111 @@ def authenticate(username: str, password: str) -> dict | None:
         name = normalize_username(username)
     except UserError:
         return None
-    with connection() as conn:
-        row = conn.execute(
-            f"SELECT {USER_COLS}, password_hash FROM users WHERE username=%s", (name,)
-        ).fetchone()
-        if row is None or not verify_password(password, row["password_hash"]):
+    with session_scope() as db:
+        user = db.scalar(select(User).where(User.username == name))
+        if user is None or not verify_password(password, user.password_hash):
             return None
-        conn.execute("UPDATE users SET last_login_at=now() WHERE id=%s", (row["id"],))
-    row.pop("password_hash")
-    return row
-
-
-# ---------------------------------------------------------------- sessions & refresh tokens
+        result = user.to_dict()
+        db.execute(update(User).where(User.id == user.id).values(last_login_at=func.now()))
+    return result
 
 
 def start_session(user_id: uuid.UUID, user_agent: str | None = None) -> tuple[uuid.UUID, str]:
-    """Create a login session and its first refresh token. Returns (session_id, refresh_token)."""
     days = get_settings().refresh_token_days
-    session_id = uuid.uuid4()
     token, token_hash = new_refresh_token()
-    with connection() as conn:
-        with conn.transaction():
-            conn.execute(
-                """DELETE FROM auth_sessions
-                   WHERE expires_at < now() - interval '1 day' OR revoked_at < now() - interval '7 days'"""
+    with session_scope() as db:
+        db.execute(
+            delete(AuthSession).where(
+                or_(
+                    AuthSession.expires_at < func.now() - timedelta(days=1),
+                    AuthSession.revoked_at < func.now() - timedelta(days=7),
+                )
             )
-            conn.execute(
-                """INSERT INTO auth_sessions (id, user_id, user_agent, expires_at)
-                   VALUES (%s, %s, %s, now() + make_interval(days => %s))""",
-                (session_id, user_id, (user_agent or "")[:300] or None, days),
-            )
-            conn.execute(
-                "INSERT INTO refresh_tokens (token_hash, session_id) VALUES (%s, %s)", (token_hash, session_id)
-            )
-    return session_id, token
+        )
+        session = AuthSession(
+            user_id=user_id,
+            user_agent=(user_agent or "")[:300] or None,
+            expires_at=func.now() + timedelta(days=days),
+        )
+        db.add(session)
+        db.flush()
+        db.add(RefreshToken(token_hash=token_hash, session_id=session.id))
+        return session.id, token
 
 
 def rotate_refresh_token(token: str) -> tuple[dict, uuid.UUID, str | None] | None:
-    """Exchange a refresh token for (user, session_id, new_refresh_token).
-
-    The presented token is single-use. A token reused within the grace window (two tabs
-    refreshing at once) still gets an access token but no new refresh token. A token reused
-    after that is treated as stolen and revokes the whole session.
-    """
     settings = get_settings()
-    with connection() as conn:
-        with conn.transaction():
-            row = conn.execute(
-                """SELECT rt.session_id, s.user_id,
-                          rt.used_at IS NOT NULL AS used,
-                          rt.used_at > now() - make_interval(secs => %s) AS in_grace,
-                          s.revoked_at IS NULL AND s.expires_at > now() AS live
-                   FROM refresh_tokens rt JOIN auth_sessions s ON s.id = rt.session_id
-                   WHERE rt.token_hash = %s
-                   FOR UPDATE OF rt, s""",
-                (settings.refresh_reuse_grace_seconds, hash_refresh_token(token)),
-            ).fetchone()
-            if row is None or not row["live"]:
-                return None
-            session_id = row["session_id"]
-            new_token = None
-            if row["used"]:
-                if not row["in_grace"]:
-                    log.warning("Refresh token reuse detected, revoking session %s", session_id)
-                    conn.execute("UPDATE auth_sessions SET revoked_at = now() WHERE id = %s", (session_id,))
-                    return None
-            else:
-                new_token, new_hash = new_refresh_token()
-                conn.execute("UPDATE refresh_tokens SET used_at = now() WHERE token_hash = %s",
-                             (hash_refresh_token(token),))
-                conn.execute(
-                    "INSERT INTO refresh_tokens (token_hash, session_id) VALUES (%s, %s)", (new_hash, session_id)
-                )
-                conn.execute(
-                    "DELETE FROM refresh_tokens WHERE session_id = %s AND used_at < now() - make_interval(days => %s)",
-                    (session_id, settings.refresh_token_days),
-                )
-            conn.execute(
-                """UPDATE auth_sessions SET last_used_at = now(), expires_at = now() + make_interval(days => %s)
-                   WHERE id = %s""",
-                (settings.refresh_token_days, session_id),
+    token_hash = hash_refresh_token(token)
+    grace = timedelta(seconds=settings.refresh_reuse_grace_seconds)
+    with session_scope() as db:
+        row = db.execute(
+            select(
+                RefreshToken.session_id,
+                AuthSession.user_id,
+                RefreshToken.used_at.is_not(None).label("used"),
+                (RefreshToken.used_at > func.now() - grace).label("in_grace"),
+                and_(AuthSession.revoked_at.is_(None), AuthSession.expires_at > func.now()).label("live"),
             )
-            user = conn.execute(f"SELECT {USER_COLS} FROM users WHERE id = %s", (row["user_id"],)).fetchone()
-    if user is None:
-        return None
-    return user, session_id, new_token
+            .join(AuthSession, AuthSession.id == RefreshToken.session_id)
+            .where(RefreshToken.token_hash == token_hash)
+            .with_for_update(of=[RefreshToken, AuthSession])
+        ).one_or_none()
+        if row is None or not row.live:
+            return None
+        session_id = row.session_id
+        new_token = None
+        if row.used:
+            if not row.in_grace:
+                log.warning("Refresh token reuse detected, revoking session %s", session_id)
+                db.execute(update(AuthSession).where(AuthSession.id == session_id).values(revoked_at=func.now()))
+                return None
+        else:
+            new_token, new_hash = new_refresh_token()
+            db.execute(update(RefreshToken).where(RefreshToken.token_hash == token_hash).values(used_at=func.now()))
+            db.add(RefreshToken(token_hash=new_hash, session_id=session_id))
+            db.flush()
+            db.execute(
+                delete(RefreshToken).where(
+                    RefreshToken.session_id == session_id,
+                    RefreshToken.used_at < func.now() - timedelta(days=settings.refresh_token_days),
+                )
+            )
+        db.execute(
+            update(AuthSession)
+            .where(AuthSession.id == session_id)
+            .values(last_used_at=func.now(), expires_at=func.now() + timedelta(days=settings.refresh_token_days))
+        )
+        user = db.get(User, row.user_id)
+        if user is None:
+            return None
+        return user.to_dict(), session_id, new_token
 
 
 def revoke_session(session_id: uuid.UUID) -> None:
-    with connection() as conn:
-        conn.execute("UPDATE auth_sessions SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL", (session_id,))
+    with session_scope() as db:
+        db.execute(
+            update(AuthSession)
+            .where(AuthSession.id == session_id, AuthSession.revoked_at.is_(None))
+            .values(revoked_at=func.now())
+        )
 
 
 def revoke_user_sessions(user_id: uuid.UUID, keep: uuid.UUID | None = None) -> int:
-    with connection() as conn:
-        cur = conn.execute(
-            """UPDATE auth_sessions SET revoked_at = now()
-               WHERE user_id = %s AND revoked_at IS NULL AND id IS DISTINCT FROM %s""",
-            (user_id, keep),
-        )
-        return cur.rowcount
+    conditions = [AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None)]
+    if keep is not None:
+        conditions.append(AuthSession.id != keep)
+    with session_scope() as db:
+        return db.execute(update(AuthSession).where(*conditions).values(revoked_at=func.now())).rowcount
 
 
 def session_for_refresh_token(token: str) -> uuid.UUID | None:
-    with connection() as conn:
-        row = conn.execute(
-            "SELECT session_id FROM refresh_tokens WHERE token_hash = %s", (hash_refresh_token(token),)
-        ).fetchone()
-    return row["session_id"] if row else None
+    with session_scope() as db:
+        return db.scalar(select(RefreshToken.session_id).where(RefreshToken.token_hash == hash_refresh_token(token)))
 
 
-# ---------------------------------------------------------------- HTTP helpers & dependencies
+def has_users() -> bool:
+    with session_scope() as db:
+        return db.scalar(select(User.id).limit(1)) is not None
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
@@ -251,13 +249,18 @@ def get_auth_context(credentials: HTTPAuthorizationCredentials | None = Depends(
         session_id = uuid.UUID(payload["sid"])
     except (jwt.PyJWTError, ValueError, KeyError, TypeError):
         raise _unauthorized() from None
-    cols = ", ".join(f"u.{c.strip()}" for c in USER_COLS.split(","))
-    with connection() as conn:
-        user = conn.execute(
-            f"""SELECT {cols} FROM users u JOIN auth_sessions s ON s.user_id = u.id
-                WHERE u.id = %s AND s.id = %s AND s.revoked_at IS NULL AND s.expires_at > now()""",
-            (user_id, session_id),
-        ).fetchone()
+    with session_scope() as db:
+        found = db.scalar(
+            select(User)
+            .join(AuthSession, AuthSession.user_id == User.id)
+            .where(
+                User.id == user_id,
+                AuthSession.id == session_id,
+                AuthSession.revoked_at.is_(None),
+                AuthSession.expires_at > func.now(),
+            )
+        )
+        user = found.to_dict() if found is not None else None
     if user is None:
         raise _unauthorized()
     return AuthContext(user, session_id)
@@ -273,14 +276,9 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
-# ---------------------------------------------------------------- routes
-
-
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(req: RegisterRequest, request: Request, response: Response):
-    with connection() as conn:
-        has_users = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
-    if has_users and not get_settings().allow_registration:
+    if has_users() and not get_settings().allow_registration:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Hệ thống không cho phép tự đăng ký")
     try:
         user = create_user(req.username, req.password, req.display_name)
@@ -343,12 +341,11 @@ def change_password(req: ChangePasswordRequest, ctx: AuthContext = Depends(get_a
         check_password_policy(req.new_password)
     except UserError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    with connection() as conn:
-        row = conn.execute("SELECT password_hash FROM users WHERE id = %s", (ctx.user["id"],)).fetchone()
-        if row is None or not verify_password(req.current_password, row["password_hash"]):
+    with session_scope() as db:
+        user = db.get(User, ctx.user["id"], with_for_update=True)
+        if user is None or not verify_password(req.current_password, user.password_hash):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Mật khẩu hiện tại không đúng")
-        conn.execute("UPDATE users SET password_hash = %s WHERE id = %s",
-                     (hash_password(req.new_password), ctx.user["id"]))
+        user.password_hash = hash_password(req.new_password)
     revoked = revoke_user_sessions(ctx.user["id"], keep=ctx.session_id)
     return {"changed": True, "revoked_sessions": revoked}
 
@@ -360,9 +357,7 @@ def me(user: dict = Depends(get_current_user)):
 
 @router.get("/config")
 def auth_config():
-    with connection() as conn:
-        has_users = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
     return {
-        "allow_registration": get_settings().allow_registration or not has_users,
+        "allow_registration": get_settings().allow_registration or not has_users(),
         "min_password_length": get_settings().min_password_length,
     }

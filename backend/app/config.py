@@ -65,6 +65,17 @@ class Settings(BaseSettings):
 
     metadata_llm: bool = True
 
+    pdf_parser: str = "docling"
+    docling_artifacts_path: str = ""
+    docling_table_mode: str = "fast"
+    docling_threads: int = 8
+    formula_vlm: bool = True
+    figure_descriptions: bool = True
+    max_figure_descriptions: int = 40
+    min_figure_pixels: int = 120
+    vision_model: str = ""
+    figure_dir: Path = BACKEND_DIR / "storage" / "figures"
+
     @model_validator(mode="after")
     def _check(self) -> "Settings":
         self.llm_provider = self.llm_provider.strip().lower()
@@ -108,4 +119,5 @@ def get_settings() -> Settings:
     s = Settings()
     s.upload_dir.mkdir(parents=True, exist_ok=True)
     s.markdown_dir.mkdir(parents=True, exist_ok=True)
+    s.figure_dir.mkdir(parents=True, exist_ok=True)
     return s

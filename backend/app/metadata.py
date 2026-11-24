@@ -9,8 +9,6 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 DOC_TYPES = ("paper", "book", "report", "manual", "other")
-DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>]+)", re.IGNORECASE)
-ARXIV_RE = re.compile(r"\barxiv[:\s]*(\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
 ISBN_RE = re.compile(r"\bISBN(?:-1[03])?[:\s]*((?:97[89][\s-]?)?(?:\d[\s-]?){9}[\dX])", re.IGNORECASE)
 JUNK_PDF_TITLE = re.compile(r"^(microsoft word|untitled|document\d*$|.*\.(docx?|pdf|tex|indd)$)", re.IGNORECASE)
 GENERIC_ALIASES = {
@@ -26,7 +24,7 @@ Fields:
 - "year": publication year as an integer, or null.
 - "doc_type": one of paper, book, report, manual, other.
 - "publisher": journal, conference or publisher.
-- "doi", "arxiv_id", "isbn": identifiers if printed.
+- "isbn": ISBN if printed.
 - "aliases": 0-5 names a reader would plausibly use to refer to this document in a question
   (short title, well-known nickname such as "the Transformer paper", acronym of the title). No generic words.
 - "summary": one sentence describing what the document is about.
@@ -41,8 +39,6 @@ class DocMeta:
     year: int | None = None
     doc_type: str = "other"
     publisher: str = ""
-    doi: str = ""
-    arxiv_id: str = ""
     isbn: str = ""
     aliases: list[str] = field(default_factory=list)
     summary: str = ""
@@ -64,8 +60,6 @@ class DocMeta:
         self.year = _year(self.year)
         self.doc_type = self.doc_type if self.doc_type in DOC_TYPES else "other"
         self.publisher = _clean(self.publisher)
-        self.doi = _clean(self.doi).rstrip(".,;)")
-        self.arxiv_id = _clean(self.arxiv_id)
         self.isbn = re.sub(r"[^\dX]", "", (self.isbn or "").upper())
         if len(self.isbn) not in (10, 13):
             self.isbn = ""
@@ -120,10 +114,6 @@ def clean_aliases(aliases: list[str] | None, title: str = "", short_title: str =
 
 def find_identifiers(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
-    if m := DOI_RE.search(text):
-        out["doi"] = m.group(1).rstrip(".,;)")
-    if m := ARXIV_RE.search(text):
-        out["arxiv_id"] = m.group(1)
     if m := ISBN_RE.search(text):
         digits = re.sub(r"[^\dX]", "", m.group(1).upper())
         if len(digits) in (10, 13):

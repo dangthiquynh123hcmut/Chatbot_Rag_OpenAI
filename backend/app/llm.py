@@ -175,6 +175,37 @@ def _openai_chat_json(system: str, user: str, temperature: float, model: str | N
     return resp.choices[0].message.content or "{}"
 
 
+def vision_text(prompt: str, png: bytes, max_tokens: int = 600) -> str:
+    settings = get_settings()
+    model = settings.vision_model or settings.active_llm_model
+    if settings.llm_provider == "bedrock":
+        from .aws import bedrock_runtime
+
+        resp = with_network_retry(
+            bedrock_runtime().converse,
+            modelId=model,
+            messages=[{"role": "user", "content": [
+                {"image": {"format": "png", "source": {"bytes": png}}},
+                {"text": prompt},
+            ]}],
+            inferenceConfig={"maxTokens": max_tokens, "temperature": 0.0},
+        )
+        return "".join(p.get("text", "") for p in resp["output"]["message"]["content"]).strip()
+    import base64
+
+    resp = with_network_retry(
+        openai_client().chat.completions.create,
+        model=model,
+        temperature=0.0,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}},
+            {"type": "text", "text": prompt},
+        ]}],
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
 def chat_json(system: str, user: str, temperature: float = 0.0, model: str | None = None) -> str:
     if get_settings().llm_provider == "bedrock":
         return _bedrock_chat_json(system, user, temperature, model)

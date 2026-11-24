@@ -167,6 +167,10 @@ export const api = {
     ),
 };
 
+export async function fetchFigure(documentId: string, name: string): Promise<Blob> {
+  return (await send(`/documents/${documentId}/figures/${name}`)).blob();
+}
+
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

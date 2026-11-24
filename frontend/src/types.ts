@@ -3,7 +3,6 @@ export type DocumentStatus = "processing" | "ready" | "error";
 export interface DocumentInfo {
   id: string;
   filename: string;
-  file_type: string;
   title: string;
   status: DocumentStatus;
   error: string | null;
@@ -22,8 +21,6 @@ export interface DocumentMeta {
   year: number | null;
   doc_type: DocType;
   publisher: string;
-  doi: string;
-  arxiv_id: string;
   isbn: string;
   aliases: string[];
   summary: string;
@@ -56,7 +53,6 @@ export interface SectionNode {
   parent_id: string | null;
   depth: number;
   kind: SectionKind;
-  number: string | null;
   label: string | null;
   title: string | null;
   heading: string | null;

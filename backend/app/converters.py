@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -7,25 +8,35 @@ from .config import get_settings
 from .hierarchy import classify_line, nfc
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
+log = logging.getLogger(__name__)
 
 
 class ConversionError(Exception):
     pass
 
 
-def pdf_to_markdown(path: Path) -> str:
+def _scan_check(path: Path) -> bool:
     import pymupdf
-    import pymupdf4llm
 
     settings = get_settings()
     with pymupdf.open(path) as doc:
         if doc.page_count == 0:
             raise ConversionError("PDF không có trang nào.")
-        sample = range(min(doc.page_count, 10))
-        text_chars = sum(len(doc[i].get_text().strip()) for i in sample)
-        scanned = text_chars < 30 * len(sample)
-        if scanned and not settings.enable_ocr:
-            raise ConversionError("PDF là bản scan (không có lớp text). Hãy bật ENABLE_OCR.")
+        step = max(1, doc.page_count // 20)
+        sample = list(range(0, doc.page_count, step))[:20]
+        empty = sum(1 for i in sample if len(doc[i].get_text().strip()) < 30)
+    scanned = empty / len(sample) > 0.6
+    if scanned and not settings.enable_ocr:
+        raise ConversionError("PDF là bản scan (không có lớp text). Hãy bật ENABLE_OCR.")
+    return scanned
+
+
+def pymupdf_to_markdown(path: Path, scanned: bool) -> str:
+    import pymupdf
+    import pymupdf4llm
+
+    settings = get_settings()
+    with pymupdf.open(path) as doc:
         try:
             md = pymupdf4llm.to_markdown(
                 doc,
@@ -43,7 +54,24 @@ def pdf_to_markdown(path: Path) -> str:
             "PDF là bản scan nhưng OCR không trích được nội dung. "
             "Cài `pip install rapidocr onnxruntime` hoặc Tesseract kèm gói ngôn ngữ 'eng'."
         )
-    return md
+    return normalize_markdown(md)
+
+
+def pdf_to_markdown(path: Path, doc_key: str | None = None) -> str:
+    from . import docling_pdf
+
+    scanned = _scan_check(path)
+    if get_settings().pdf_parser.lower() == "docling":
+        if docling_pdf.available():
+            try:
+                md, stats = docling_pdf.convert_pdf(path, doc_key, do_ocr=scanned)
+                log.info("Docling %s: %s", path.name, stats)
+                return light_normalize(md)
+            except Exception:
+                log.exception("Docling conversion failed for %s, falling back to pymupdf4llm", path.name)
+        else:
+            log.warning("PDF_PARSER=docling nhưng chưa cài docling, dùng pymupdf4llm")
+    return pymupdf_to_markdown(path, scanned)
 
 
 def docx_to_markdown(path: Path) -> str:
@@ -124,15 +152,20 @@ def normalize_markdown(md: str) -> str:
     return text.strip() + "\n"
 
 
-def convert_to_markdown(path: Path) -> str:
+def light_normalize(md: str) -> str:
+    md = nfc(md).replace("\r\n", "\n").replace("\r", "\n").replace(" ", " ")
+    md = re.sub(r"[​﻿]", "", md)
+    return re.sub(r"\n{3,}", "\n\n", md).strip() + "\n"
+
+
+def convert_to_markdown(path: Path, doc_key: str | None = None) -> str:
     ext = path.suffix.lower()
     if ext == ".pdf":
-        raw = pdf_to_markdown(path)
+        md = pdf_to_markdown(path, doc_key)
     elif ext == ".docx":
-        raw = docx_to_markdown(path)
+        md = normalize_markdown(docx_to_markdown(path))
     else:
         raise ConversionError(f"Định dạng {ext} chưa được hỗ trợ (chỉ PDF, DOCX).")
-    md = normalize_markdown(raw)
     if not md.strip():
         raise ConversionError("Không trích xuất được nội dung từ tài liệu.")
     return md

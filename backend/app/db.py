@@ -9,11 +9,50 @@ import psycopg
 from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from .config import get_settings
 
 _pool: ConnectionPool | None = None
+_engine: Engine | None = None
+_session_factory: sessionmaker[Session] | None = None
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "alembic.ini"
+
+
+def sqlalchemy_url() -> str:
+    url = get_settings().database_url
+    for prefix in ("postgresql+psycopg://", "postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
+def get_engine() -> Engine:
+    global _engine, _session_factory
+    if _engine is None:
+        _engine = create_engine(sqlalchemy_url(), pool_size=5, max_overflow=5, pool_pre_ping=True)
+        _session_factory = sessionmaker(_engine, expire_on_commit=False)
+    return _engine
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    get_engine()
+    session = _session_factory()
+    try:
+        yield session
+        session.commit()
+    except BaseException:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_session() -> Iterator[Session]:
+    with session_scope() as session:
+        yield session
 
 
 def alembic_config():
@@ -66,10 +105,14 @@ def get_pool() -> ConnectionPool:
 
 
 def close_pool() -> None:
-    global _pool
+    global _pool, _engine, _session_factory
     if _pool is not None:
         _pool.close()
         _pool = None
+    if _engine is not None:
+        _engine.dispose()
+        _engine = None
+        _session_factory = None
 
 
 @contextmanager

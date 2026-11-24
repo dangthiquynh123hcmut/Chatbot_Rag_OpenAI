@@ -17,8 +17,6 @@ interface FormState {
   year: string;
   doc_type: DocType;
   publisher: string;
-  doi: string;
-  arxiv_id: string;
   isbn: string;
   aliases: string;
   summary: string;
@@ -32,8 +30,6 @@ function toForm(meta: DocumentMeta | undefined, fallbackTitle: string): FormStat
     year: meta?.year ? String(meta.year) : "",
     doc_type: meta?.doc_type ?? "other",
     publisher: meta?.publisher ?? "",
-    doi: meta?.doi ?? "",
-    arxiv_id: meta?.arxiv_id ?? "",
     isbn: meta?.isbn ?? "",
     aliases: (meta?.aliases ?? []).join("; "),
     summary: meta?.summary ?? "",
@@ -88,8 +84,6 @@ export default function MetadataPanel({ doc, isAdmin, onSaved }: MetadataPanelPr
         year,
         doc_type: form.doc_type,
         publisher: form.publisher.trim(),
-        doi: form.doi.trim(),
-        arxiv_id: form.arxiv_id.trim(),
         isbn: form.isbn.trim(),
         aliases: splitList(form.aliases),
         summary: form.summary.trim(),
@@ -116,14 +110,12 @@ export default function MetadataPanel({ doc, isAdmin, onSaved }: MetadataPanelPr
         <Row label="Năm" value={meta?.year ? String(meta.year) : ""} />
         <Row label="Loại" value={meta?.doc_type ?? ""} />
         <Row label="Nơi xuất bản" value={meta?.publisher ?? ""} />
-        <Row label="DOI" value={meta?.doi ?? ""} />
-        <Row label="arXiv" value={meta?.arxiv_id ?? ""} />
         <Row label="ISBN" value={meta?.isbn ?? ""} />
         <Row label="Tên gọi khác" value={(meta?.aliases ?? []).join(", ")} />
         <Row label="Tóm tắt" value={meta?.summary ?? ""} />
         <Row label="Nguồn metadata" value={meta?.source === "manual" ? "sửa tay" : "tự động"} />
         <p className="hint">
-          Khi câu hỏi nhắc tới tiêu đề, tên gọi khác, tác giả ("Vaswani et al."), DOI/arXiv/ISBN của tài liệu này, hệ
+          Khi câu hỏi nhắc tới tiêu đề, tên gọi khác, tác giả ("Vaswani et al."), ISBN của tài liệu này, hệ
           thống chỉ tìm trong tài liệu này.
         </p>
         {message && <div className="notice">{message}</div>}
@@ -170,20 +162,10 @@ export default function MetadataPanel({ doc, isAdmin, onSaved }: MetadataPanelPr
         Nơi xuất bản
         <input value={form.publisher} onChange={(e) => set("publisher", e.target.value)} maxLength={300} />
       </label>
-      <div className="meta-grid">
-        <label>
-          DOI
-          <input value={form.doi} onChange={(e) => set("doi", e.target.value)} />
-        </label>
-        <label>
-          arXiv
-          <input value={form.arxiv_id} onChange={(e) => set("arxiv_id", e.target.value)} />
-        </label>
-        <label>
-          ISBN
-          <input value={form.isbn} onChange={(e) => set("isbn", e.target.value)} />
-        </label>
-      </div>
+      <label>
+        ISBN
+        <input value={form.isbn} onChange={(e) => set("isbn", e.target.value)} />
+      </label>
       <label>
         Tên gọi khác (ngăn cách bằng dấu ;)
         <input value={form.aliases} onChange={(e) => set("aliases", e.target.value)} />

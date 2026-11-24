@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.tsx";
+import "katex/dist/katex.min.css";
 import "./styles.css";
 
 const container = document.getElementById("root");

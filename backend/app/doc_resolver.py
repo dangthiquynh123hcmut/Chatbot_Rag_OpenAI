@@ -41,9 +41,8 @@ def _phrases(entry: CatalogEntry) -> list[Phrase]:
         single = len(alias.split()) == 1
         acronym = single and sum(1 for c in alias if c.isupper()) >= 2
         out.append(Phrase(alias, "alias", case_sensitive=single and not acronym))
-    for ident, kind in ((meta.doi, "doi"), (meta.arxiv_id, "arxiv"), (meta.isbn, "isbn")):
-        if ident:
-            out.append(Phrase(ident, kind))
+    if meta.isbn:
+        out.append(Phrase(meta.isbn, "isbn"))
     if meta.authors:
         surname = meta.authors[0].split()[-1]
         if len(surname) >= 3:

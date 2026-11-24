@@ -20,10 +20,21 @@ Câu hỏi ──► Nhận diện số hiệu (Điều 3, Khoản 2, Mục 1.2�
                                                                        └─► Đối chiếu trích dẫn, xác định mục sâu nhất chứa nó
 ```
 
-### 1. Chuyển sang Markdown (`backend/app/converters.py`)
-- PDF: `pymupdf4llm` (nhận diện bố cục, bảng). PDF scan được phát hiện tự động và chạy OCR nếu đã cài engine.
-- DOCX: `mammoth` → HTML → `markdownify` (giữ Heading, bảng, danh sách tự đánh số của Word).
-- Chuẩn hóa: bỏ số trang, ghép dòng bị ngắt giữa câu, bỏ gạch nối cuối dòng.
+### 1. Chuyển sang Markdown (`backend/app/converters.py`, `backend/app/docling_pdf.py`)
+- **PDF: [Docling](https://github.com/docling-project/docling)** (mô hình nhận dạng bố cục + TableFormer), chạy offline với model đóng gói sẵn trong image (`DOCLING_ARTIFACTS_PATH`, `HF_HUB_OFFLINE=1`):
+
+  | Phần tử | Xử lý |
+  | --- | --- |
+  | Header / footer / số trang | Docling gắn nhãn "furniture" → loại khỏi nội dung |
+  | Tiêu đề | Cấp lấy theo **mục lục nhúng (bookmarks)** của PDF nếu có (dùng luôn tiêu đề trong mục lục, ví dụ "Chapter 2 A Tale of Two Values"); không có thì theo số thứ tự ("3.2.1"). Lọc tiêu đề rác ("Click here to view code image", tên file code, dòng code) |
+  | Bảng (kể cả ô gộp) | Trải phẳng thành bảng Markdown: ô gộp ngang lặp lại, tiêu đề nhiều tầng ghép thành "BLEU / EN-DE" |
+  | Hình | Lưu PNG vào `storage/figures/<document_id>/`, chèn `![chú thích](figure://…)` + chú thích; tùy chọn mô tả bằng Claude vision (`FIGURE_DESCRIPTIONS`, tối đa `MAX_FIGURE_DESCRIPTIONS` hình lớn nhất/có chú thích) |
+  | Công thức | Cắt ảnh vùng công thức → Claude vision chép thành LaTeX `$$ … $$` (`FORMULA_VLM`); tắt thì giữ chữ gốc. Model công thức của Docling không dùng vì quá chậm trên CPU (~100 giây/công thức) |
+  | Code | Khối ` ``` ` giữ nguyên thụt lề |
+
+  Docling lỗi hoặc chưa cài → tự lùi về `pymupdf4llm` (`PDF_PARSER=pymupdf` để dùng hẳn). Tốc độ trên CPU khoảng 2 giây/trang (không tính gọi Claude vision).
+- DOCX: `mammoth` → HTML → `markdownify` (giữ Heading, bảng, danh sách tự đánh số của Word), rồi chuẩn hóa: bỏ số trang, ghép dòng bị ngắt giữa câu, bỏ gạch nối cuối dòng.
+- Chunker không bao giờ cắt đôi khối code, công thức, hình; bảng dài được tách theo nhóm dòng và **lặp lại dòng tiêu đề** ở mỗi phần.
 
 ### 2. Chunking Hierarchy-Aware (`backend/app/hierarchy.py`)
 - Nhận diện tiêu đề bằng mẫu: `Phần thứ…`, `Chương I`, `Mục 1`, `Tiểu mục 1`, `Điều 5.`, khoản `1.`, điểm `a)`, `I.`, `1.1.`, `1.1.1`, heading Markdown.
@@ -99,8 +110,28 @@ python -m app.cli ask "What does paragraph 2 of Article 3 provide?"
 ```
 `preview` chỉ chuyển đổi và in cây phân tầng, không cần DB hay OpenAI – nên dùng để kiểm tra tài liệu trước khi nạp.
 
+### Truy cập DB: SQLAlchemy ORM + SQL thuần (kiểu lai)
+
+| Lớp | Công cụ | Dùng ở |
+| --- | --- | --- |
+| Định nghĩa schema | Model SQLAlchemy trong [`backend/app/models.py`](backend/app/models.py) – nguồn duy nhất cho cả 8 bảng | Alembic so sánh model với DB |
+| CRUD nghiệp vụ | **ORM** (`Session`, `select`, `update`…) | `auth.py` (users, auth_sessions, refresh_tokens), `chat.py` (conversations, messages), endpoint tài liệu trong `main.py` |
+| Nạp tài liệu & truy hồi | **psycopg + SQL thuần** | `ingest.py`, `retrieval.py`, `audit_db.py`, cây mục / toàn văn mục trong `main.py` – các truy vấn dùng pgvector `<=>`, `tsvector`, JSONB `@>`, `WITH RECURSIVE`, `executemany` |
+
+- Session ORM: `session_scope()` (tự commit/rollback) và dependency FastAPI `get_session` trong `db.py`. Model bật `eager_defaults`, nên giá trị DB sinh (`created_at`, `updated_at = now()`) có ngay sau `flush()` qua `RETURNING`.
+- Hai pool kết nối cùng driver psycopg3: pool psycopg (tối đa 10) cho truy hồi/nạp, engine SQLAlchemy (5 + 5 tràn) cho CRUD.
+- Thêm bảng/cột: sửa `models.py` rồi để Alembic tự sinh migration (xem dưới), không viết SQL ở nhiều nơi.
+
 ### Migration schema (Alembic)
-Schema PostgreSQL được quản lý bằng Alembic (`backend/alembic.ini`, `backend/migrations/versions/`). Backend tự chạy `alembic upgrade head` khi khởi động. Các migration viết bằng SQL thuần (`op.execute`), không dùng ORM. DB tạo bằng bản cũ (trước khi có Alembic) được migration `0001` nâng cấp thẳng mà không mất dữ liệu.
+Schema PostgreSQL được quản lý bằng Alembic (`backend/alembic.ini`, `backend/migrations/versions/`). Backend tự chạy `alembic upgrade head` khi khởi động. `migrations/env.py` dùng `Base.metadata` của `models.py` làm `target_metadata`, nên Alembic **tự sinh migration** từ thay đổi trong model:
+```powershell
+alembic revision --autogenerate -m "mo ta thay doi"
+```
+Luôn đọc lại file sinh ra trước khi chạy. Kiểm tra model và DB có lệch nhau không (dùng được trong CI, trả mã lỗi nếu lệch):
+```powershell
+alembic check
+```
+Autogenerate **bỏ qua** các đối tượng đặc thù PostgreSQL mà Alembic so sánh không chính xác – chỉ mục HNSW `chunks_embedding_idx`, GIN `chunks_tsv_idx` / `sections_refs_idx`, chỉ mục `conversations_user_idx (updated_at DESC)` và cột sinh `chunks.tsv` (danh sách `MANUAL_OBJECTS` trong `env.py`). Đổi các đối tượng này thì viết tay bằng `op.execute("...")` trong migration. DB tạo bằng bản cũ (trước khi có Alembic) được migration `0001` nâng cấp thẳng mà không mất dữ liệu.
 
 Các lệnh dưới chạy trong thư mục `backend`. `DATABASE_URL` được lấy từ `.env`.
 ```powershell
@@ -109,7 +140,7 @@ alembic current
 ```powershell
 alembic upgrade head
 ```
-Tạo migration mới (sau đó sửa `upgrade()`/`downgrade()` bằng `op.execute("...")`):
+Tạo migration rỗng để viết tay (cho các đối tượng autogenerate bỏ qua):
 ```powershell
 alembic revision -m "mo ta thay doi"
 ```
@@ -122,7 +153,7 @@ alembic upgrade head --sql
 ```powershell
 cd backend; pip install -r requirements-dev.txt; python -m pytest -q tests
 ```
-Test luồng đăng nhập (`tests/test_auth_flow.py`) cần một PostgreSQL **dùng để thử, có thể xóa**. Nếu không đặt `TEST_DATABASE_URL` thì các test này tự bỏ qua:
+Test luồng đăng nhập và CRUD qua ORM (`tests/test_auth_flow.py`, `tests/test_orm_crud.py`) cần một PostgreSQL **dùng để thử, có thể xóa**. Nếu không đặt `TEST_DATABASE_URL` thì các test này tự bỏ qua:
 ```powershell
 $env:TEST_DATABASE_URL="postgresql://rag:rag@localhost:5432/rag_test"; python -m pytest -q tests
 ```
@@ -159,7 +190,6 @@ Trạng thái: `PASS` / `INFO` / `WARN` / `FAIL`. Lệnh trả mã lỗi khi có
 cd backend; python -m app.cli audit-db --self-retrieval 30
 ```
 - Số chiều vector đúng `EMBEDDING_DIM`, không NaN / vector rỗng, norm ≈ 1 với Titan V2.
-- Toàn bộ chunk dùng cùng một model embedding (cột `chunks.embedding_model`); dữ liệu nạp trước khi có cột này sẽ báo `WARN` – xử lý lại tài liệu để ghi model.
 - Không có vector trùng nhau cho nội dung khác nhau, mọi chunk nằm gọn trong mục của nó.
 - `--self-retrieval N`: lấy N tiêu đề mục ngẫu nhiên làm câu hỏi, đo Hit@1, Hit@5, MRR xem có tìm lại đúng mục đó không (gọi embedding API, tốn một ít chi phí). Thêm `--doc <id>` để audit một tài liệu.
 
@@ -284,13 +314,13 @@ Khi nạp tài liệu, hệ thống trích metadata (lưu ở cột `documents.m
 
 | Nguồn | Lấy được |
 | --- | --- |
-| Regex trên nội dung | DOI, arXiv ID, ISBN |
+| Regex trên nội dung | ISBN |
 | Metadata nhúng trong PDF | Tiêu đề, tác giả (bỏ giá trị rác kiểu "Microsoft Word - …") |
 | LLM đọc ~8.000 ký tự đầu (trang tiêu đề, abstract, trang bản quyền) | Tiêu đề, tên ngắn, tác giả, năm, loại (`paper`/`book`/`report`/`manual`), nơi xuất bản, tên gọi khác, tóm tắt 1 câu |
 
 Metadata được dùng ở 2 chỗ:
 1. **Ngữ cảnh embedding**: mỗi chunk mở đầu bằng `Tài liệu: Attention Is All You Need (Vaswani et al., 2017)` thay vì tên file.
-2. **Tự giới hạn phạm vi**: nếu câu hỏi nhắc tới tài liệu – tiêu đề, tên ngắn/tên gọi khác ("the Transformer paper"), tác giả ("Vaswani et al.", "Vaswani 2017", "Robert C. Martin"), DOI/arXiv/ISBN – hệ thống chỉ tìm trong tài liệu đó (kết quả có `scope: "detected"` và `documents_detected`). Người dùng tự chọn tài liệu thì lựa chọn đó được ưu tiên (`scope: "selected"`); không nhắc gì thì tìm toàn bộ (`scope: "all"`).
+2. **Tự giới hạn phạm vi**: nếu câu hỏi nhắc tới tài liệu – tiêu đề, tên ngắn/tên gọi khác ("the Transformer paper"), tác giả ("Vaswani et al.", "Vaswani 2017", "Robert C. Martin"), ISBN – hệ thống chỉ tìm trong tài liệu đó (kết quả có `scope: "detected"` và `documents_detected`). Người dùng tự chọn tài liệu thì lựa chọn đó được ưu tiên (`scope: "selected"`); không nhắc gì thì tìm toàn bộ (`scope: "all"`).
 
 Chống nhận nhầm: tên gọi một từ chỉ được chấp nhận khi là viết tắt (BERT), CamelCase (ResNet) hoặc chính là tiêu đề một từ; tiêu đề một từ ("Refactoring") chỉ khớp khi viết hoa và không đứng đầu câu, nên "When is refactoring worth it?" không bị gán cho cuốn sách.
 
@@ -318,7 +348,7 @@ Thêm `--doc <id>` cho một tài liệu, `--force` để ghi đè cả metadata
 | POST | `/api/documents` | admin | Upload PDF/DOCX (multipart `files`), xử lý nền |
 | POST | `/api/documents/{id}/reindex` | admin | Xử lý lại |
 | DELETE | `/api/documents/{id}` | admin | Xóa |
-| PATCH | `/api/documents/{id}/metadata` | admin | Sửa metadata (tiêu đề, tác giả, năm, DOI/ISBN, tên gọi khác…) |
+| PATCH | `/api/documents/{id}/metadata` | admin | Sửa metadata (tiêu đề, tác giả, năm, ISBN, tên gọi khác…) |
 | POST | `/api/query` | user | Hỏi không lưu lịch sử: `{"query", "document_ids", "top_k"}` |
 
 Kết quả `/api/query` (và trường `result` của tin nhắn trả lời) gồm `answer`, `primary` (mục chính xác: `path`, `content` nguyên văn, `quote`, `quote_verified`) và `sources` (các mục sau rerank kèm điểm vector / keyword / RRF / rerank).
@@ -354,6 +384,19 @@ Kiểm tra từ trong container:
 ```powershell
 docker compose --profile full exec backend python -m app.cli check-aws
 ```
+
+### Build image bị treo khi tải PyTorch / model Docling
+Cùng nguyên nhân MTU: `docker build` chạy trên mạng mặc định (MTU 1500) nên tải file lớn (gói `torch` ~210 MB, model Docling) bị treo đến hết thời gian chờ. Build qua một builder gắn vào mạng MTU 1400 của dự án:
+```powershell
+docker buildx create --name mtu1400 --driver docker-container --driver-opt network=chatbot_rag_openai_default
+```
+```powershell
+docker buildx build --builder mtu1400 --load -t chatbot_rag_openai-backend backend
+```
+```powershell
+docker compose --profile full up -d backend
+```
+Image backend khoảng 5–6 GB vì chứa PyTorch CPU và model Docling (~700 MB, đã bỏ model công thức).
 
 ## PDF scan (ví dụ `data/TT_HCM.pdf`)
 File scan không có lớp text nên cần OCR. Cài thêm `pip install rapidocr onnxruntime` (hoặc Tesseract kèm gói ngôn ngữ `vie`) rồi bật `ENABLE_OCR=true`. Nếu không có OCR, tài liệu sẽ báo lỗi rõ ràng thay vì nạp nội dung rỗng. Với văn bản tiếng Việt có dấu, Tesseract `vie` thường cho kết quả tốt hơn.

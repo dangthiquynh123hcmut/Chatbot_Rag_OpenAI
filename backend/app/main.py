@@ -9,18 +9,21 @@ from pathlib import Path
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
-from psycopg.types.json import Jsonb
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_admin
 from .auth import router as auth_router
 from .chat import router as chat_router
 from .config import get_settings
 from .converters import SUPPORTED_EXTENSIONS
-from .db import close_pool, connection, init_db
+from .docling_pdf import figure_path, remove_figures
+from .db import close_pool, connection, get_session, init_db
 from .ingest import create_document, process_document
 from .metadata import DocMeta
+from .models import Document
 from .rag import answer_query
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -52,8 +55,6 @@ class MetadataUpdate(BaseModel):
     year: int | None = Field(default=None, ge=1400, le=2100)
     doc_type: str | None = None
     publisher: str | None = Field(default=None, max_length=300)
-    doi: str | None = Field(default=None, max_length=200)
-    arxiv_id: str | None = Field(default=None, max_length=50)
     isbn: str | None = Field(default=None, max_length=30)
     aliases: list[str] | None = Field(default=None, max_length=20)
     summary: str | None = Field(default=None, max_length=1000)
@@ -63,9 +64,6 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=2, max_length=2000)
     document_ids: list[uuid.UUID] | None = None
     top_k: int | None = Field(default=None, ge=1, le=20)
-
-
-DOC_COLS = "id, filename, file_type, title, status, error, num_sections, num_chunks, created_at, meta"
 
 
 def _upload_path(doc_id: uuid.UUID, filename: str) -> Path:
@@ -78,10 +76,16 @@ def _stored_file(doc_id: uuid.UUID) -> Path | None:
     return matches[0] if matches else None
 
 
+def _document(db: Session, doc_id: uuid.UUID, lock: bool = False) -> Document:
+    doc = db.get(Document, doc_id, with_for_update=lock)
+    if doc is None:
+        raise HTTPException(404, "Không tìm thấy tài liệu")
+    return doc
+
+
 @app.get("/api/health")
-def health():
-    with connection() as conn:
-        conn.execute("SELECT 1")
+def health(db: Session = Depends(get_session)):
+    db.execute(text("SELECT 1"))
     s = get_settings()
     return {
         "status": "ok",
@@ -115,35 +119,26 @@ async def upload_documents(
 
 
 @app.get("/api/documents")
-def list_documents(_: dict = Depends(get_current_user)):
-    with connection() as conn:
-        rows = conn.execute(f"SELECT {DOC_COLS} FROM documents ORDER BY created_at DESC").fetchall()
-    return {"documents": rows}
+def list_documents(_: dict = Depends(get_current_user), db: Session = Depends(get_session)):
+    docs = db.scalars(select(Document).order_by(Document.created_at.desc())).all()
+    return {"documents": [d.to_dict() for d in docs]}
 
 
 @app.get("/api/documents/{doc_id}")
-def get_document(doc_id: uuid.UUID, _: dict = Depends(get_current_user)):
-    with connection() as conn:
-        row = conn.execute(f"SELECT {DOC_COLS} FROM documents WHERE id=%s", (doc_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "Không tìm thấy tài liệu")
-    return row
+def get_document(doc_id: uuid.UUID, _: dict = Depends(get_current_user), db: Session = Depends(get_session)):
+    return _document(db, doc_id).to_dict()
 
 
 @app.get("/api/documents/{doc_id}/markdown", response_class=PlainTextResponse)
-def get_markdown(doc_id: uuid.UUID, _: dict = Depends(get_current_user)):
-    with connection() as conn:
-        row = conn.execute("SELECT markdown FROM documents WHERE id=%s", (doc_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "Không tìm thấy tài liệu")
-    return row["markdown"] or ""
+def get_markdown(doc_id: uuid.UUID, _: dict = Depends(get_current_user), db: Session = Depends(get_session)):
+    return _document(db, doc_id).markdown or ""
 
 
 @app.get("/api/documents/{doc_id}/tree")
 def get_tree(doc_id: uuid.UUID, _: dict = Depends(get_current_user)):
     with connection() as conn:
         rows = conn.execute(
-            """SELECT id, parent_id, depth, kind, number, label, title, heading, refs
+            """SELECT id, parent_id, depth, kind, label, title, heading, refs
                FROM sections WHERE document_id=%s AND kind <> 'document' ORDER BY ord""",
             (doc_id,),
         ).fetchall()
@@ -165,42 +160,53 @@ def get_section(section_id: uuid.UUID, _: dict = Depends(get_current_user)):
 
 
 @app.patch("/api/documents/{doc_id}/metadata")
-def update_metadata(doc_id: uuid.UUID, req: MetadataUpdate, _: dict = Depends(require_admin)):
-    with connection() as conn:
-        row = conn.execute("SELECT title, meta FROM documents WHERE id=%s", (doc_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Không tìm thấy tài liệu")
-        merged = {**DocMeta.from_dict(row["meta"]).to_dict(), **req.model_dump(exclude_unset=True), "source": "manual"}
-        meta = DocMeta.from_dict(merged)
-        updated = conn.execute(
-            f"UPDATE documents SET meta=%s, title=%s WHERE id=%s RETURNING {DOC_COLS}",
-            (Jsonb(meta.to_dict()), meta.title or row["title"], doc_id),
-        ).fetchone()
-    return {"document": updated, "reindex_recommended": True}
+def update_metadata(
+    doc_id: uuid.UUID, req: MetadataUpdate, _: dict = Depends(require_admin), db: Session = Depends(get_session)
+):
+    doc = _document(db, doc_id, lock=True)
+    merged = {**DocMeta.from_dict(doc.meta).to_dict(), **req.model_dump(exclude_unset=True), "source": "manual"}
+    meta = DocMeta.from_dict(merged)
+    doc.meta = meta.to_dict()
+    doc.title = meta.title or doc.title
+    db.flush()
+    return {"document": doc.to_dict(), "reindex_recommended": True}
 
 
 @app.post("/api/documents/{doc_id}/reindex")
-def reindex_document(doc_id: uuid.UUID, background: BackgroundTasks, _: dict = Depends(require_admin)):
+def reindex_document(
+    doc_id: uuid.UUID,
+    background: BackgroundTasks,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_session),
+):
     path = _stored_file(doc_id)
     if path is None:
         raise HTTPException(404, "Không còn file gốc để xử lý lại")
-    with connection() as conn:
-        conn.execute("UPDATE documents SET status='processing', error=NULL WHERE id=%s", (doc_id,))
+    doc = _document(db, doc_id, lock=True)
+    doc.status, doc.error = "processing", None
+    db.commit()
     background.add_task(process_document, doc_id, path)
     return {"id": str(doc_id), "status": "processing"}
 
 
 @app.delete("/api/documents/{doc_id}")
-def delete_document(doc_id: uuid.UUID, _: dict = Depends(require_admin)):
-    with connection() as conn:
-        deleted = conn.execute("DELETE FROM documents WHERE id=%s RETURNING id", (doc_id,)).fetchone()
-    if not deleted:
-        raise HTTPException(404, "Không tìm thấy tài liệu")
+def delete_document(doc_id: uuid.UUID, _: dict = Depends(require_admin), db: Session = Depends(get_session)):
+    db.delete(_document(db, doc_id))
+    db.commit()
     path = _stored_file(doc_id)
     if path:
         path.unlink(missing_ok=True)
     (get_settings().markdown_dir / f"{doc_id}.md").unlink(missing_ok=True)
+    remove_figures(str(doc_id))
     return {"deleted": str(doc_id)}
+
+
+@app.get("/api/documents/{doc_id}/figures/{name}")
+def get_figure(doc_id: uuid.UUID, name: str, _: dict = Depends(get_current_user)):
+    path = figure_path(str(doc_id), name)
+    if path is None:
+        raise HTTPException(404, "Không tìm thấy hình")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post("/api/query")

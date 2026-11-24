@@ -20,7 +20,6 @@ ATTENTION = DocMeta.from_dict({
     "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar"],
     "year": 2017,
     "doc_type": "paper",
-    "arxiv_id": "1706.03762",
     "aliases": ["Transformer paper", "the", "Attention paper"],
 })
 CLEAN = DocMeta.from_dict({
@@ -63,14 +62,13 @@ def test_alias_rules():
 
 def test_find_identifiers():
     text = "doi: 10.1145/3292500.3330701. Preprint arXiv:1706.03762v5 ISBN-13: 978-0-13-449416-6"
-    assert find_identifiers(text) == {"doi": "10.1145/3292500.3330701", "arxiv_id": "1706.03762", "isbn": "9780134494166"}
+    assert find_identifiers(text) == {"isbn": "9780134494166"}
 
 
 def test_resolve_documents():
     assert _ids("In Clean Architecture, what is the Dependency Rule?") == ["c"]
     assert _ids("what does the transformer paper say about positional encoding") == ["a"]
     assert _ids("Vaswani et al. section 3.2 attention") == ["a"]
-    assert _ids("arXiv 1706.03762 results") == ["a"]
     assert _ids("ISBN 9780134494166 chapter 5") == ["c"]
     assert _ids("Robert C. Martin on components") == ["c"]
     assert _ids("What does Refactoring say about long methods?") == ["r"]
@@ -128,10 +126,10 @@ def test_retrieve_scopes_to_detected_document(tmp_path, monkeypatch):
 
 def test_extract_metadata_merges_sources(monkeypatch):
     llm_out = {"title": "Attention Is All You Need", "authors": ["Ashish Vaswani"], "year": 2017,
-               "doc_type": "paper", "aliases": ["Transformer paper"], "doi": ""}
+               "doc_type": "paper", "aliases": ["Transformer paper"]}
     monkeypatch.setattr(md, "_llm_metadata", lambda head, filename: llm_out)
-    meta = md.extract_metadata(None, "Title page ... arXiv:1706.03762v5 ...", "NIPS-2017.pdf")
-    assert meta.title == "Attention Is All You Need" and meta.arxiv_id == "1706.03762"
+    meta = md.extract_metadata(None, "Title page ... ISBN 978-0-13-449416-6 ...", "NIPS-2017.pdf")
+    assert meta.title == "Attention Is All You Need" and meta.isbn == "9780134494166"
     assert meta.source == "auto" and meta.aliases == ["Transformer paper"]
     no_llm = md.extract_metadata(None, "no ids here", "My_Book.docx", use_llm=False)
     assert no_llm.title == "My Book" and no_llm.authors == []
