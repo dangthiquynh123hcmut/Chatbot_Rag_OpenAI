@@ -82,7 +82,6 @@ class Section(Base):
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     label: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text)
-    heading: Mapped[str | None] = mapped_column(Text)
     path: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
     refs: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     full_md: Mapped[str | None] = mapped_column(Text)
@@ -110,10 +109,9 @@ class Chunk(Base):
     )
     part: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embed_text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
     tsv: Mapped[str | None] = mapped_column(
-        TSVECTOR, Computed(f"to_tsvector('{TSV_CONFIG}'::regconfig, embed_text)", persisted=True)
+        TSVECTOR, Computed(f"to_tsvector('{TSV_CONFIG}'::regconfig, content)", persisted=True)
     )
 
 

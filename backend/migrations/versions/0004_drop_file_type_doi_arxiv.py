@@ -18,7 +18,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_type TEXT")
     op.execute(
-        "UPDATE documents SET file_type = lower(substring(filename from '\.([^.]+)$')) WHERE file_type IS NULL"
+        r"UPDATE documents SET file_type = lower(substring(filename from '\.([^.]+)$')) WHERE file_type IS NULL"
     )
     op.execute("UPDATE documents SET file_type = '' WHERE file_type IS NULL")
     op.execute("ALTER TABLE documents ALTER COLUMN file_type SET NOT NULL")

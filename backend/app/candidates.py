@@ -17,7 +17,6 @@ class Candidate:
     document_id: uuid.UUID
     document_title: str
     path: list[str]
-    heading: str
     content: str
     full_md: str
     match_type: str
@@ -67,7 +66,6 @@ def rrf_fuse(vector_hits: Sequence[Candidate], keyword_hits: Sequence[Candidate]
                     document_id=hit.document_id,
                     document_title=hit.document_title,
                     path=hit.path,
-                    heading=hit.heading,
                     content=hit.content,
                     full_md=hit.full_md,
                     match_type="semantic",

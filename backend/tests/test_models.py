@@ -22,7 +22,7 @@ def test_all_tables_are_modelled():
 def test_chunk_columns_match_postgres_features():
     ddl = _ddl(CreateTable(Chunk.__table__))
     assert f"VECTOR({get_settings().embedding_dim})" in ddl
-    assert "GENERATED ALWAYS AS (to_tsvector('english'::regconfig, embed_text)) STORED" in ddl
+    assert "GENERATED ALWAYS AS (to_tsvector('english'::regconfig, content)) STORED" in ddl
     indexes = {i.name: _ddl(CreateIndex(i)) for i in Chunk.__table__.indexes}
     assert "USING hnsw (embedding vector_cosine_ops)" in indexes["chunks_embedding_idx"]
     assert "USING gin (tsv)" in indexes["chunks_tsv_idx"]

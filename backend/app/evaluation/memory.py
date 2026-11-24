@@ -131,7 +131,7 @@ class MemoryBackend:
             for i, ch in enumerate(build_chunks(root, s.chunk_max_chars, s.chunk_overlap_paragraphs)):
                 et = embedding_text(title, ch.node, ch.content)
                 be.chunks.append(
-                    MemChunk(uuid.uuid5(doc_id, f"chunk:{i}"), be.by_node[id(ch.node)], ch.content, Counter(_tokens(et)))
+                    MemChunk(uuid.uuid5(doc_id, f"chunk:{i}"), be.by_node[id(ch.node)], ch.content, Counter(_tokens(ch.content)))
                 )
                 texts.append(et)
             log.info("Loaded %s", path.name)
@@ -160,7 +160,6 @@ class MemoryBackend:
             document_id=sec.document_id,
             document_title=sec.title,
             path=sec.path,
-            heading=sec.node.heading,
             content=content,
             full_md=sec.full_md,
             match_type=match_type,
@@ -234,6 +233,6 @@ class MemoryBackend:
         rows = []
         for n in sec.node.iter():
             s = self.by_node[id(n)]
-            rows.append({"id": s.id, "depth": n.depth, "kind": n.kind, "path": s.path, "heading": n.heading,
+            rows.append({"id": s.id, "depth": n.depth, "kind": n.kind, "path": s.path,
                          "full_md": s.full_md, "ord": n.order})
         return rows

@@ -69,15 +69,14 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                     n.kind,
                     n.label if n.kind != "document" else PREAMBLE,
                     n.title,
-                    n.heading,
                     n.path if n.kind != "document" else [PREAMBLE],
                     Jsonb(n.refs),
                     n.full_markdown() if n.kind != "document" else n.own_text,
                 )
             )
         chunk_rows = [
-            (uuid.uuid4(), doc_id, node_ids[id(c.node)], c.part, c.content, et, v)
-            for c, et, v in zip(chunks, embed_inputs, vectors)
+            (uuid.uuid4(), doc_id, node_ids[id(c.node)], c.part, c.content, v)
+            for c, v in zip(chunks, vectors)
         ]
 
         with connection() as conn:
@@ -86,13 +85,13 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                 with conn.cursor() as cur:
                     cur.executemany(
                         """INSERT INTO sections (id, document_id, parent_id, ord, depth, kind, label,
-                           title, heading, path, refs, full_md)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                           title, path, refs, full_md)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         section_rows,
                     )
                     cur.executemany(
-                        """INSERT INTO chunks (id, document_id, section_id, part, content, embed_text, embedding)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                        """INSERT INTO chunks (id, document_id, section_id, part, content, embedding)
+                           VALUES (%s,%s,%s,%s,%s,%s)""",
                         chunk_rows,
                     )
                 conn.execute(

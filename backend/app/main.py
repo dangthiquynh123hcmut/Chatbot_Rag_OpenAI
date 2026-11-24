@@ -138,7 +138,7 @@ def get_markdown(doc_id: uuid.UUID, _: dict = Depends(get_current_user), db: Ses
 def get_tree(doc_id: uuid.UUID, _: dict = Depends(get_current_user)):
     with connection() as conn:
         rows = conn.execute(
-            """SELECT id, parent_id, depth, kind, label, title, heading, refs
+            """SELECT id, parent_id, depth, kind, label, title, refs
                FROM sections WHERE document_id=%s AND kind <> 'document' ORDER BY ord""",
             (doc_id,),
         ).fetchall()
@@ -149,7 +149,7 @@ def get_tree(doc_id: uuid.UUID, _: dict = Depends(get_current_user)):
 def get_section(section_id: uuid.UUID, _: dict = Depends(get_current_user)):
     with connection() as conn:
         row = conn.execute(
-            """SELECT s.id, s.document_id, d.title AS document_title, s.kind, s.label, s.title, s.heading,
+            """SELECT s.id, s.document_id, d.title AS document_title, s.kind, s.label, s.title,
                       s.path, s.refs, s.full_md
                FROM sections s JOIN documents d ON d.id = s.document_id WHERE s.id=%s""",
             (section_id,),

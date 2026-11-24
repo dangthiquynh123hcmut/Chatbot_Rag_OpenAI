@@ -55,7 +55,6 @@ export interface SectionNode {
   kind: SectionKind;
   label: string | null;
   title: string | null;
-  heading: string | null;
   refs: Refs;
 }
 
@@ -66,7 +65,6 @@ export interface SectionDetail {
   kind: SectionKind;
   label: string | null;
   title: string | null;
-  heading: string | null;
   path: string[];
   refs: Refs;
   full_md: string | null;
@@ -80,7 +78,6 @@ export interface Source {
   document_id: string;
   document_title: string;
   path: string[];
-  heading: string;
   content: string;
   matched_chunk: string | null;
   match_type: MatchType;
@@ -95,7 +92,6 @@ export interface PrimaryResult {
   document_id: string;
   document_title: string;
   path: string[];
-  heading: string;
   content: string;
   parent_path: string[];
   quote: string;

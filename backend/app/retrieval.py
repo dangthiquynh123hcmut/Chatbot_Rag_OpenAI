@@ -11,7 +11,7 @@ from .metadata import DocMeta
 from .references import STRONG_KEYS, ref_variants
 
 SECTION_COLS = """s.id AS section_id, s.document_id, d.title AS document_title, d.filename AS document_filename,
-                  s.path, s.heading, s.full_md, s.depth, s.kind, s.refs"""
+                  s.path, s.full_md, s.depth, s.kind, s.refs"""
 JOINS = "FROM chunks c JOIN sections s ON s.id = c.section_id JOIN documents d ON d.id = c.document_id"
 # Must match the config of the generated chunks.tsv column (migration 0002).
 TS_CONFIG = "english"
@@ -24,7 +24,6 @@ def _candidate(r: dict, match_type: str, chunk: bool) -> Candidate:
         document_id=r["document_id"],
         document_title=r["document_title"],
         path=r["path"],
-        heading=r["heading"] or "",
         content=r["content"] if chunk else (r["full_md"] or ""),
         full_md=r["full_md"] or "",
         match_type=match_type,
@@ -113,6 +112,6 @@ def fetch_subtree(section_id: uuid.UUID) -> list[dict]:
                    UNION ALL
                    SELECT s.* FROM sections s JOIN tree t ON s.parent_id = t.id
                )
-               SELECT id, parent_id, depth, kind, path, heading, full_md, ord FROM tree ORDER BY ord""",
+               SELECT id, parent_id, depth, kind, path, full_md, ord FROM tree ORDER BY ord""",
             (section_id,),
         ).fetchall()
