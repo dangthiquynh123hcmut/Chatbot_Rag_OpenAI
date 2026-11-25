@@ -16,15 +16,13 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="TEST_DATABASE_URL not set")
 def client(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from app import auth, config, db, main
+    from app import config, main
 
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
     monkeypatch.setenv("REFRESH_REUSE_GRACE_SECONDS", "0")
     config.get_settings.cache_clear()
-    db.close_pool()
     with TestClient(main.app) as c:
         yield c
-    db.close_pool()
     config.get_settings.cache_clear()
 
 

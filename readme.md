@@ -43,7 +43,7 @@ Câu hỏi ──► Nhận diện số hiệu (Điều 3, Khoản 2, Mục 1.2�
 - Chunk = đơn vị nhỏ nhất có tiêu đề (ví dụ một **Điều** gộp luôn các khoản/điểm của nó). Mục quá dài được tách theo đoạn có overlap, mỗi phần vẫn lặp lại tiêu đề. Không bao giờ gộp hai mục anh em vào một chunk.
 - Văn bản dùng để embedding được thêm ngữ cảnh: `Tài liệu: … / Vị trí: Chương II > Mục 1 > Điều 3`.
 
-### 3. Truy vấn (`retrieval.py`, `rerank.py`, `rag.py`)
+### 3. Truy vấn (`services/search_backend.py`, `rerank.py`, `rag.py`)
 1. **Tra theo số hiệu**: câu hỏi chứa "Điểm b khoản 2 Điều 3" → truy vấn `refs @> {...}` lấy đúng nút.
 2. **Hybrid search**: pgvector (cosine, HNSW) + PostgreSQL full-text, gộp bằng Reciprocal Rank Fusion.
 3. **Rerank** (`RERANKER`):
@@ -110,20 +110,26 @@ python -m app.cli ask "What does paragraph 2 of Article 3 provide?"
 ```
 `preview` chỉ chuyển đổi và in cây phân tầng, không cần DB hay OpenAI – nên dùng để kiểm tra tài liệu trước khi nạp.
 
-### Truy cập DB: SQLAlchemy ORM + SQL thuần (kiểu lai)
+### Kiến trúc backend: router → service → repository → model
 
-| Lớp | Công cụ | Dùng ở |
+Backend chia tầng theo mẫu JESCO-AI-BE, nối với nhau bằng container DI (`dependency-injector`):
+
+| Tầng | Thư mục | Vai trò |
 | --- | --- | --- |
-| Định nghĩa schema | Model SQLAlchemy trong [`backend/app/models.py`](backend/app/models.py) – nguồn duy nhất cho cả 8 bảng | Alembic so sánh model với DB |
-| CRUD nghiệp vụ | **ORM** (`Session`, `select`, `update`…) | `auth.py` (users, auth_sessions, refresh_tokens), `chat.py` (conversations, messages), endpoint tài liệu trong `main.py` |
-| Nạp tài liệu & truy hồi | **psycopg + SQL thuần** | `ingest.py`, `retrieval.py`, `audit_db.py`, cây mục / toàn văn mục trong `main.py` – các truy vấn dùng pgvector `<=>`, `tsvector`, JSONB `@>`, `WITH RECURSIVE`, `executemany` |
+| API | `app/routers/` | Endpoint FastAPI, cookie refresh, xác thực (`deps.py`: `CurrentUser`, `AdminUser`); không truy cập DB trực tiếp |
+| Schema | `app/schemas/` | Pydantic request/response (đúng shape JSON frontend dùng) |
+| Service | `app/services/` (+ `interfaces/`) | Nghiệp vụ: `AuthService`, `ConversationService`, `DocumentService`, `IngestService`, `QueryService`, `DbSearchBackend` |
+| Repository | `app/repositories/` (+ `interfaces/`) | Mọi truy vấn DB bằng SQLAlchemy (kể cả pgvector `cosine_distance`, full-text `@@`, JSONB `contains`, CTE đệ quy, bulk insert) |
+| ORM | `app/models/` | Model SQLAlchemy – nguồn duy nhất cho cả 8 bảng, Alembic so sánh model với DB |
+| Core | `app/core/` | `database.py` (engine, `Base`, migrate), `context.py` + `middleware.py` (session theo request), `containers.py` (DI), `exceptions.py`, `security.py` |
 
-- Session ORM: `session_scope()` (tự commit/rollback) và dependency FastAPI `get_session` trong `db.py`. Model bật `eager_defaults`, nên giá trị DB sinh (`created_at`, `updated_at = now()`) có ngay sau `flush()` qua `RETURNING`.
-- Hai pool kết nối cùng driver psycopg3: pool psycopg (tối đa 10) cho truy hồi/nạp, engine SQLAlchemy (5 + 5 tràn) cho CRUD.
-- Thêm bảng/cột: sửa `models.py` rồi để Alembic tự sinh migration (xem dưới), không viết SQL ở nhiều nơi.
+- Session theo request: `SessionMiddleware` mở một session, đặt vào context; repository/service nhận nó qua `Container.session`. Request kết thúc không lỗi → commit, có exception → rollback. `AppException` (`NotFoundError`, `ForbiddenError`…) trả về `{"detail": ...}`.
+- Code chạy ngoài request (ingest nền, truy hồi RAG, CLI, đánh giá) dùng `session_factory_provider`: mỗi lần mở một session ngắn, không giữ transaction trong lúc gọi LLM/embedding.
+- Một engine SQLAlchemy duy nhất (driver psycopg3, pool 5 + 5 tràn). Model bật `eager_defaults`, nên giá trị DB sinh (`created_at`, `updated_at = now()`) có ngay sau `flush()` qua `RETURNING`.
+- Thêm bảng/cột: sửa model trong `app/models/` rồi để Alembic tự sinh migration (xem dưới); thêm truy vấn: thêm method vào repository (và interface của nó).
 
 ### Migration schema (Alembic)
-Schema PostgreSQL được quản lý bằng Alembic (`backend/alembic.ini`, `backend/migrations/versions/`). Backend tự chạy `alembic upgrade head` khi khởi động. `migrations/env.py` dùng `Base.metadata` của `models.py` làm `target_metadata`, nên Alembic **tự sinh migration** từ thay đổi trong model:
+Schema PostgreSQL được quản lý bằng Alembic (`backend/alembic.ini`, `backend/migrations/versions/`). Backend tự chạy `alembic upgrade head` khi khởi động. `migrations/env.py` dùng `Base.metadata` của `app/models/` làm `target_metadata`, nên Alembic **tự sinh migration** từ thay đổi trong model:
 ```powershell
 alembic revision --autogenerate -m "mo ta thay doi"
 ```

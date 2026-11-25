@@ -5,7 +5,10 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.config import get_settings
-from app.models import CRUD_TABLES, RAW_SQL_TABLES, Base, Chunk, Conversation, Document, Message, User
+from app.models import Base, Chunk, Conversation, Document, Message, User
+from app.schemas.auth_schema import UserResponse
+from app.schemas.conversation_schema import ConversationResponse, MessageResponse
+from app.schemas.document_schema import DocumentResponse
 
 
 def _ddl(obj) -> str:
@@ -13,7 +16,6 @@ def _ddl(obj) -> str:
 
 
 def test_all_tables_are_modelled():
-    assert set(Base.metadata.tables) == set(CRUD_TABLES) | set(RAW_SQL_TABLES)
     assert set(Base.metadata.tables) == {
         "documents", "sections", "chunks", "users", "auth_sessions", "refresh_tokens", "conversations", "messages",
     }
@@ -37,15 +39,19 @@ def test_constraints_and_defaults():
     assert "meta JSONB DEFAULT '{}'::jsonb NOT NULL" in _ddl(CreateTable(Document.__table__))
 
 
-def test_to_dict_shapes():
+def test_response_schema_shapes():
     now = datetime.now(timezone.utc)
     u = User(id=uuid.uuid4(), username="a", password_hash="secret", display_name="A", role="user",
              created_at=now, last_login_at=None)
-    assert set(u.to_dict()) == {"id", "username", "display_name", "role", "created_at", "last_login_at"}
-    assert "password_hash" not in u.to_dict()
+    user = UserResponse.model_validate(u).model_dump()
+    assert set(user) == {"id", "username", "display_name", "role", "created_at", "last_login_at"}
+    assert "password_hash" not in user
     c = Conversation(id=uuid.uuid4(), user_id=u.id, title="t", created_at=now, updated_at=now)
-    assert set(c.to_dict()) == {"id", "title", "created_at", "updated_at"}
+    assert set(ConversationResponse.model_validate(c).model_dump()) == {"id", "title", "created_at", "updated_at"}
     m = Message(id=uuid.uuid4(), conversation_id=c.id, role="user", content="q", created_at=now)
-    assert set(m.to_dict()) == {"id", "role", "content", "result", "document_ids", "created_at"}
-    d = Document(id=uuid.uuid4(), filename="f.pdf", title="T", status="ready", meta={})
-    assert "markdown" not in d.to_dict() and d.to_dict()["meta"] == {}
+    assert set(MessageResponse.model_validate(m).model_dump()) == {
+        "id", "role", "content", "result", "document_ids", "created_at",
+    }
+    d = Document(id=uuid.uuid4(), filename="f.pdf", title="T", status="ready", meta={}, created_at=now)
+    doc = DocumentResponse.model_validate(d).model_dump()
+    assert "markdown" not in doc and doc["meta"] == {}

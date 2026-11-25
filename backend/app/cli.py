@@ -24,23 +24,28 @@ def cmd_preview(args: argparse.Namespace) -> None:
     print(f"\n{sum(1 for _ in root.iter()) - 1} sections, {len(chunks)} chunks")
 
 
-def cmd_ingest(args: argparse.Namespace) -> None:
-    from .db import init_db
-    from .ingest import ingest_file
+def _container():
+    """DI container with a migrated database (commands that use PostgreSQL)."""
+    from .core.containers import Container
+    from .core.database import init_db
 
-    init_db()
+    container = Container()
+    init_db(container.db())
+    return container
+
+
+def cmd_ingest(args: argparse.Namespace) -> None:
+    ingest = _container().ingest_service_provider()
     target = Path(args.path)
     files = [target] if target.is_file() else sorted(p for p in target.rglob("*") if p.suffix.lower() in SUPPORTED_EXTENSIONS)
     for f in files:
         print(f"Ingesting {f} ...")
-        doc_id = ingest_file(f)
+        doc_id = ingest.ingest_file(f)
         print(f"  -> {doc_id}")
 
 
 def cmd_ask(args: argparse.Namespace) -> None:
-    from .rag import answer_query
-
-    res = answer_query(args.question)
+    res = _container().query_service_provider().answer(args.question)
     print(res["answer"])
     if res["primary"]:
         print("\n" + " > ".join(res["primary"]["path"]))
@@ -83,7 +88,8 @@ def cmd_audit_db(args: argparse.Namespace) -> None:
 
     from .audit_db import audit_database
 
-    reports = audit_database(_uuid.UUID(args.doc) if args.doc else None, args.self_retrieval)
+    session_factory = _container().session_factory_provider()
+    reports = audit_database(session_factory, _uuid.UUID(args.doc) if args.doc else None, args.self_retrieval)
     _finish_audit(reports, args)
 
 
@@ -121,9 +127,7 @@ def cmd_eval_run(args: argparse.Namespace) -> None:
 
         backend = MemoryBackend.from_paths(Path(args.docs), Path(args.cache_dir))
     else:
-        from .retrieval import DbBackend
-
-        backend = DbBackend()
+        backend = _container().search_backend_provider()
     retrieval = e2e = None
     if args.stage in ("retrieval", "all"):
         retrieval = run_retrieval(items, backend, args.scope, args.reranker, args.workers)
@@ -139,39 +143,34 @@ def cmd_eval_run(args: argparse.Namespace) -> None:
 def cmd_extract_metadata(args: argparse.Namespace) -> None:
     import uuid as _uuid
 
-    from .db import connection, init_db
-    from .ingest import refresh_metadata
     from .metadata import display_label
+    from .utils.file_utils import stored_file
 
-    init_db()
-    with connection() as conn:
-        if args.doc:
-            rows = conn.execute("SELECT id FROM documents WHERE id=%s", (_uuid.UUID(args.doc),)).fetchall()
-        else:
-            rows = conn.execute("SELECT id FROM documents WHERE status='ready' ORDER BY created_at").fetchall()
-    upload_dir = get_settings().upload_dir
-    for r in rows:
-        stored = next(iter(upload_dir.glob(f"{r['id']}_*")), None)
-        meta = refresh_metadata(r["id"], stored, force=args.force)
+    ingest = _container().ingest_service_provider()
+    for doc_id in ingest.document_ids(_uuid.UUID(args.doc) if args.doc else None):
+        meta = ingest.refresh_metadata(doc_id, stored_file(doc_id), force=args.force)
         if meta is None:
             continue
-        print(f"{r['id']}  [{meta.source}] {display_label(meta, meta.title)}  aliases={meta.aliases}")
+        print(f"{doc_id}  [{meta.source}] {display_label(meta, meta.title)}  aliases={meta.aliases}")
     print("Chạy 'reindex' cho từng tài liệu nếu muốn cập nhật ngữ cảnh tiêu đề/tác giả trong embedding.")
 
 
 def cmd_create_user(args: argparse.Namespace) -> None:
     import getpass
 
-    from .auth import UserError, create_user
-    from .db import init_db
+    from .core.context import session_context
+    from .services.auth_service import UserError
 
-    init_db()
+    container = _container()
     password = args.password or getpass.getpass("Mật khẩu: ")
     try:
-        user = create_user(args.username, password, args.display_name, "admin" if args.admin else "user")
+        with session_context(container.session_factory_provider()):
+            user = container.auth_service_provider().create_user(
+                args.username, password, args.display_name, "admin" if args.admin else "user"
+            )
     except UserError as exc:
         sys.exit(str(exc))
-    print(f"Đã tạo tài khoản {user['username']} (role={user['role']})")
+    print(f"Đã tạo tài khoản {user.username} (role={user.role})")
 
 
 def cmd_check_aws(args: argparse.Namespace) -> None:

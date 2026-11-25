@@ -3,11 +3,10 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 
-from app import llm, security
+from app import llm
 from app.config import Settings, get_settings
-from app.auth import UserError, normalize_username
-from app.chat import make_title
-from app.security import (
+from app.core import security
+from app.core.security import (
     create_access_token,
     decode_access_token,
     hash_password,
@@ -15,6 +14,8 @@ from app.security import (
     new_refresh_token,
     verify_password,
 )
+from app.services.auth_service import UserError, normalize_username
+from app.services.conversation_service import make_title
 
 
 def test_password_hash_roundtrip():

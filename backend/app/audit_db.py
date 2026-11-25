@@ -8,26 +8,23 @@ import numpy as np
 
 from .audit import AuditReport, Check, _squash, _status, chunk_within
 from .config import get_settings
-from .db import connection
-from .retrieval import fetch_subtree
+from .core.context import SessionFactory
+from .repositories.chunk_repository import ChunkRepository
+from .repositories.document_repository import DocumentRepository
+from .repositories.section_repository import SectionRepository
 
 
-def _documents(doc_id: uuid.UUID | None) -> list[dict]:
-    with connection() as conn:
-        if doc_id:
-            return conn.execute("SELECT id, title, filename FROM documents WHERE id=%s", (doc_id,)).fetchall()
-        return conn.execute(
-            "SELECT id, title, filename FROM documents WHERE status='ready' ORDER BY created_at"
-        ).fetchall()
+def _documents(session_factory: SessionFactory, doc_id: uuid.UUID | None) -> list[dict]:
+    with session_factory() as session:
+        return [
+            {"id": d.id, "title": d.title, "filename": d.filename}
+            for d in DocumentRepository(session).list_ready(doc_id)
+        ]
 
 
-def _chunk_rows(doc_id: uuid.UUID) -> list[dict]:
-    with connection() as conn:
-        return conn.execute(
-            """SELECT c.id, c.content, c.embedding, s.full_md, s.path, s.kind
-               FROM chunks c JOIN sections s ON s.id = c.section_id WHERE c.document_id=%s""",
-            (doc_id,),
-        ).fetchall()
+def _chunk_rows(session_factory: SessionFactory, doc_id: uuid.UUID) -> list[dict]:
+    with session_factory() as session:
+        return ChunkRepository(session).rows_for_audit(doc_id)
 
 
 def _to_array(value) -> np.ndarray:
@@ -78,16 +75,11 @@ def check_vectors(rows: list[dict]) -> list[Check]:
     return checks
 
 
-def check_self_retrieval(doc_id: uuid.UUID, sample: int, seed: int = 42) -> Check:
+def check_self_retrieval(session_factory: SessionFactory, doc_id: uuid.UUID, sample: int, seed: int = 42) -> Check:
     from .llm import embed_query
 
-    with connection() as conn:
-        sections = conn.execute(
-            """SELECT id, title, path FROM sections
-               WHERE document_id=%s AND kind NOT IN ('document','clause','point')
-                 AND title IS NOT NULL AND length(title) >= 6""",
-            (doc_id,),
-        ).fetchall()
+    with session_factory() as session:
+        sections = SectionRepository(session).titled_sections(doc_id)
     if not sections:
         return Check("Self-retrieval (tiêu đề → mục)", "info", "Không có mục có tiêu đề để thử")
     random.Random(seed).shuffle(sections)
@@ -96,14 +88,11 @@ def check_self_retrieval(doc_id: uuid.UUID, sample: int, seed: int = 42) -> Chec
     rr = 0.0
     misses = []
     for sec in picked:
-        family = {row["id"] for row in fetch_subtree(sec["id"])}
-        with connection() as conn:
-            top = conn.execute(
-                """SELECT c.section_id FROM chunks c WHERE c.document_id=%s
-                   ORDER BY c.embedding <=> %s LIMIT 5""",
-                (doc_id, embed_query(sec["title"])),
-            ).fetchall()
-        ranks = [i for i, r in enumerate(top) if r["section_id"] in family]
+        query_vec = embed_query(sec["title"])
+        with session_factory() as session:
+            family = {row["id"] for row in SectionRepository(session).subtree(sec["id"])}
+            top = ChunkRepository(session).nearest_section_ids(doc_id, query_vec, 5)
+        ranks = [i for i, section_id in enumerate(top) if section_id in family]
         if ranks:
             hit5 += 1
             hit1 += ranks[0] == 0
@@ -117,15 +106,17 @@ def check_self_retrieval(doc_id: uuid.UUID, sample: int, seed: int = 42) -> Chec
                  {"hit@1": round(h1, 4), "hit@5": round(h5, 4), "mrr": round(mrr, 4), "n": n})
 
 
-def audit_database(doc_id: uuid.UUID | None = None, self_retrieval: int = 0) -> list[AuditReport]:
+def audit_database(
+    session_factory: SessionFactory, doc_id: uuid.UUID | None = None, self_retrieval: int = 0
+) -> list[AuditReport]:
     reports = []
-    for d in _documents(doc_id):
-        rows = _chunk_rows(d["id"])
+    for d in _documents(session_factory, doc_id):
+        rows = _chunk_rows(session_factory, d["id"])
         if not rows:
             reports.append(AuditReport(d["filename"], d["title"], [Check("Chunk", "fail", "Không có chunk nào")], {}))
             continue
         checks = check_vectors(rows)
         if self_retrieval > 0:
-            checks.append(check_self_retrieval(d["id"], self_retrieval))
+            checks.append(check_self_retrieval(session_factory, d["id"], self_retrieval))
         reports.append(AuditReport(d["filename"], d["title"], checks, {"document_id": str(d["id"]), "chunks": len(rows)}))
     return reports

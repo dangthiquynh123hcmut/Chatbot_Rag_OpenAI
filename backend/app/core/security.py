@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 
-from .config import get_settings
+from app.config import get_settings
 
 log = logging.getLogger(__name__)
 

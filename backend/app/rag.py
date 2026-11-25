@@ -41,12 +41,6 @@ class RetrievalTrace:
     scope: str = "all"
 
 
-def default_backend() -> SearchBackend:
-    from .retrieval import DbBackend
-
-    return DbBackend()
-
-
 def normalize_for_match(s: str) -> str:
     s = re.sub(r"[#*_`>|]", " ", nfc(s))
     s = re.sub(r"-{3,}", " ", s)
@@ -69,13 +63,12 @@ def quote_in(quote: str, text: str) -> bool:
 
 def retrieve(
     query: str,
-    document_ids: list[uuid.UUID] | None = None,
-    top_k: int | None = None,
-    backend: SearchBackend | None = None,
+    document_ids: list[uuid.UUID] | None,
+    top_k: int | None,
+    backend: SearchBackend,
     reranker: str | None = None,
 ) -> RetrievalTrace:
     settings = get_settings()
-    backend = backend or default_backend()
     top_k = top_k or settings.final_top_k
     query = nfc(query).strip()
     trace = RetrievalTrace(query=query, refs=parse_references(query))
@@ -125,8 +118,7 @@ def _source_dict(c: Candidate, rank: int) -> dict:
     }
 
 
-def generate_answer(trace: RetrievalTrace, backend: SearchBackend | None = None) -> dict:
-    backend = backend or default_backend()
+def generate_answer(trace: RetrievalTrace, backend: SearchBackend) -> dict:
     sections = trace.sections
     result: dict = {
         "query": trace.query,
@@ -187,9 +179,8 @@ def generate_answer(trace: RetrievalTrace, backend: SearchBackend | None = None)
 
 def answer_query(
     query: str,
-    document_ids: list[uuid.UUID] | None = None,
-    top_k: int | None = None,
-    backend: SearchBackend | None = None,
+    document_ids: list[uuid.UUID] | None,
+    top_k: int | None,
+    backend: SearchBackend,
 ) -> dict:
-    backend = backend or default_backend()
     return generate_answer(retrieve(query, document_ids, top_k, backend), backend)

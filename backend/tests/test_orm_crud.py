@@ -11,23 +11,32 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="TEST_DATABASE_URL not set")
 def client(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from app import chat, config, db, main
+    from app import config, main
+    from app.services.query_service import QueryService
 
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
     config.get_settings.cache_clear()
-    db.close_pool()
-    monkeypatch.setattr(chat, "answer_query", lambda q, d, k: {"answer": f"echo: {q}", "found": True, "sources": []})
+    monkeypatch.setattr(
+        QueryService, "answer", lambda self, q, d, k: {"answer": f"echo: {q}", "found": True, "sources": []}
+    )
     with TestClient(main.app) as c:
         yield c
-    db.close_pool()
     config.get_settings.cache_clear()
 
 
+def _session_factory():
+    from app import main
+
+    return main.app.state.container.session_factory_provider()
+
+
 def _login(client, role="user"):
-    from app.auth import create_user
+    from app import main
+    from app.core.context import session_context
 
     name = f"o{uuid.uuid4().hex[:10]}"
-    create_user(name, "correct-horse-1", role=role)
+    with session_context(_session_factory()):
+        main.app.state.container.auth_service_provider().create_user(name, "correct-horse-1", role=role)
     r = client.post("/api/auth/login", json={"username": name, "password": "correct-horse-1"})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -66,12 +75,11 @@ def test_conversation_lifecycle(client):
 
 
 def test_document_crud(client):
-    from app.db import session_scope
     from app.models import Document
 
     user, admin = _login(client), _login(client, role="admin")
     doc_id = uuid.uuid4()
-    with session_scope() as s:
+    with _session_factory()() as s:
         s.add(Document(id=doc_id, filename="paper.pdf", title="paper", status="ready",
                        markdown="# Paper", meta={"title": "paper"}))
 
