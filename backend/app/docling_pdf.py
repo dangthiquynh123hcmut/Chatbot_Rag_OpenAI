@@ -32,8 +32,17 @@ FORMULA_PROMPT = (
 FIGURE_PROMPT = (
     "This image is a figure from a document. Describe it for search indexing in 2-4 sentences: "
     "what it shows, its main components and labels, and how they relate. "
-    "Do not speculate beyond what is visible. Caption: {caption}"
+    "Do not speculate beyond what is visible. "
+    "Write plain prose only: no headings, lists or Markdown. Caption: {caption}"
 )
+# Multi-panel figures: Docling often detects each panel as its own picture, with the caption attached to only
+# one of them and the panel titles as separate short text items. These settings decide what counts as one figure.
+PANEL_GAP_PT = 24.0
+PANEL_LABEL_MAX_WORDS = 8
+CROP_PAD_PT = 4.0
+SENTENCE_END_RE = re.compile(r"[.!?:;…)\]\"'”’]$")
+ENUM_START_RE = re.compile(r"^([a-zđ]|[ivx]{1,4}|\d{1,3})[).]\s", re.IGNORECASE)
+MD_HEADING_LINE_RE = re.compile(r"^\s*#{1,6}\s")
 
 _converters: dict[bool, object] = {}
 _converter_lock = threading.Lock()
@@ -48,6 +57,7 @@ class FigureAsset:
     width: int
     height: int
     description: str = ""
+    panel_titles: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -60,7 +70,99 @@ class ConversionStats:
     formulas: int = 0
     formulas_vlm: int = 0
     described_figures: int = 0
+    merged_panels: int = 0
+    joined_paragraphs: int = 0
     notes: list[str] = field(default_factory=list)
+
+
+Box = tuple[float, float, float, float]  # (left, top, right, bottom), top-left origin, PDF points
+
+
+@dataclass
+class LayoutEntry:
+    """Layout facts about one Docling item, enough to decide panel grouping without Docling itself."""
+
+    kind: str  # "picture" | "label" (short text that may be a panel title) | "skip" (caption) | "other"
+    page: int | None = None
+    box: Box | None = None
+    captions: int = 0
+
+
+def _union(boxes: list[Box]) -> Box:
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _attached_label(label: Box, pictures: list[Box]) -> bool:
+    """A panel title sits just above/below/inside the panels and is centred over one of them."""
+    u = _union(pictures)
+    if label[3] < u[1] - PANEL_GAP_PT or label[1] > u[3] + PANEL_GAP_PT:
+        return False
+    centre = (label[0] + label[2]) / 2
+    return any(p[0] <= centre <= p[2] and (label[2] - label[0]) <= 1.5 * (p[2] - p[0]) + PANEL_GAP_PT for p in pictures)
+
+
+def find_panel_groups(entries: list[LayoutEntry]) -> list[tuple[list[int], list[int]]]:
+    """Find runs of ≥2 pictures on one page that together carry at most one caption (one figure split into panels).
+
+    Returns (picture indices, panel-title label indices) per group. Short labels may sit right before the first
+    picture or between pictures; any other content in between ends the run.
+    """
+    groups: list[tuple[list[int], list[int]]] = []
+    i, n = 0, len(entries)
+    while i < n:
+        first = entries[i]
+        if first.kind != "picture" or first.box is None:
+            i += 1
+            continue
+        pics, between, pending, j = [i], [], [], i + 1
+        while j < n:
+            e = entries[j]
+            if e.kind == "skip":
+                j += 1
+            elif e.kind == "label" and e.page == first.page and e.box is not None:
+                pending.append(j)
+                j += 1
+            elif e.kind == "picture" and e.page == first.page and e.box is not None:
+                pics.append(j)
+                between += pending
+                pending = []
+                j += 1
+            else:
+                break
+        boxes = [entries[p].box for p in pics]
+        if len(pics) < 2 or sum(entries[p].captions for p in pics) > 1:
+            i += 1
+            continue
+        if not all(_attached_label(entries[k].box, boxes) for k in between):
+            i += 1
+            continue
+        labels = list(between)
+        k = i - 1
+        while k >= 0 and entries[k].kind in ("label", "skip"):
+            e = entries[k]
+            if e.kind == "label":
+                if e.page != first.page or e.box is None or not _attached_label(e.box, boxes):
+                    break
+                labels.insert(0, k)
+            k -= 1
+        labels += [p for p in pending if _attached_label(entries[p].box, boxes)]
+        groups.append((pics, labels))
+        i = max(pics) + 1
+    return groups
+
+
+def continues_paragraph(prev: str, nxt: str) -> bool:
+    """True when `nxt` is the rest of a sentence that `prev` left unfinished (e.g. cut by a page break or figure)."""
+    prev, nxt = prev.rstrip(), nxt.lstrip()
+    if not prev or not nxt or prev.startswith(("#", "|", "```", "$$", "![")):
+        return False
+    return not SENTENCE_END_RE.search(prev) and nxt[0].islower() and not ENUM_START_RE.match(nxt)
+
+
+def clean_description(text: str) -> str:
+    lines = [ln for ln in text.splitlines() if not MD_HEADING_LINE_RE.match(ln)] or [text.lstrip("# ")]
+    out = " ".join(lines).replace("**", "").replace("__", "")
+    return re.sub(r"\s+", " ", out).strip()
 
 
 def available() -> bool:
@@ -156,6 +258,70 @@ def _png(image) -> bytes:
     return buf.getvalue()
 
 
+def _item_box(item, page_heights: dict[int, float]) -> tuple[int | None, Box | None]:
+    prov = getattr(item, "prov", None) or []
+    if not prov:
+        return None, None
+    p = prov[0]
+    height = page_heights.get(p.page_no)
+    if height is None:
+        return p.page_no, None
+    bb = p.bbox.to_top_left_origin(height)
+    return p.page_no, (bb.l, bb.t, bb.r, bb.b)
+
+
+def _crop_page(doc, page_no: int, box: Box):
+    """Crop a region from Docling's rendered page image (needs generate_page_images)."""
+    page = doc.pages.get(page_no)
+    image = getattr(getattr(page, "image", None), "pil_image", None) if page is not None else None
+    if image is None:
+        return None
+    s = image.width / page.size.width
+    l, t, r, b = box
+    return image.crop((
+        max(0, int((l - CROP_PAD_PT) * s)), max(0, int((t - CROP_PAD_PT) * s)),
+        min(image.width, int((r + CROP_PAD_PT) * s)), min(image.height, int((b + CROP_PAD_PT) * s)),
+    ))
+
+
+def _compose_panels(panels: list[tuple[object, Box]]):
+    """Fallback without a page image: paste each panel's own crop at its position on a white canvas."""
+    from PIL import Image
+
+    u = _union([b for _, b in panels])
+    s = max(img.width / max(1.0, b[2] - b[0]) for img, b in panels)
+    canvas = Image.new("RGB", (max(1, round((u[2] - u[0]) * s)), max(1, round((u[3] - u[1]) * s))), "white")
+    for img, (l, t, r, b) in panels:
+        size = (max(1, round((r - l) * s)), max(1, round((b - t) * s)))
+        canvas.paste(img.convert("RGB").resize(size), (round((l - u[0]) * s), round((t - u[1]) * s)))
+    return canvas
+
+
+def _figure_image(doc, members: list, group_entries: list[LayoutEntry]):
+    """Image for one picture, or for a multi-panel group: the page region spanning all panels and their titles."""
+    if group_entries:
+        page_no = group_entries[0].page
+        boxes = [e.box for e in group_entries if e.box is not None]
+        if page_no is not None and boxes:
+            cropped = _crop_page(doc, page_no, _union(boxes))
+            if cropped is not None:
+                return cropped
+        panels = []
+        for m, e in zip(members, group_entries):
+            try:
+                img = m.get_image(doc)
+            except Exception:
+                img = None
+            if img is not None and e.box is not None:
+                panels.append((img, e.box))
+        if panels:
+            return _compose_panels(panels)
+    try:
+        return members[0].get_image(doc)
+    except Exception:
+        return None
+
+
 def _clean_latex(text: str) -> str:
     t = text.strip()
     t = re.sub(r"^```(?:latex|tex)?\s*|\s*```$", "", t).strip()
@@ -199,9 +365,10 @@ def _describe_figures(figures: list[FigureAsset], stats: ConversionStats) -> Non
 
     def describe(f: FigureAsset) -> None:
         try:
-            f.description = re.sub(
-                r"\s+", " ", vision_text(FIGURE_PROMPT.format(caption=f.caption or "(none)"), f.png, max_tokens=300)
-            ).strip()
+            prompt = FIGURE_PROMPT.format(caption=f.caption or "(none)")
+            if f.panel_titles:
+                prompt += "\nThe figure has several panels titled: " + "; ".join(f.panel_titles)
+            f.description = clean_description(vision_text(prompt, f.png, max_tokens=300))
         except Exception as exc:
             log.warning("Figure description failed for %s: %s", f.name, exc)
 
@@ -235,8 +402,41 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
     figure_slots: dict[str, int] = {}
     seen_headings: set[str] = set()
     title_seen = False
+    # Figures, tables and footnotes float: a paragraph may continue after them. Their block indices are kept here
+    # so a later text item can be joined back onto the paragraph they interrupted.
+    float_blocks: set[int] = set()
+    last_para: int | None = None
+    text_labels = {DocItemLabel.TEXT, getattr(DocItemLabel, "PARAGRAPH", DocItemLabel.TEXT)}
 
-    for item, _level in doc.iterate_items():
+    items = [item for item, _level in doc.iterate_items()]
+    page_heights = {no: page.size.height for no, page in doc.pages.items()}
+    entries: list[LayoutEntry] = []
+    for item in items:
+        page_no, box = _item_box(item, page_heights)
+        label = getattr(item, "label", None)
+        text = (getattr(item, "text", "") or "").strip()
+        if getattr(item, "self_ref", "") in caption_refs:
+            kind = "skip"
+        elif label in picture_labels:
+            kind = "picture"
+        elif (label in text_labels or label == DocItemLabel.SECTION_HEADER) and text \
+                and len(text.split()) <= PANEL_LABEL_MAX_WORDS and not is_numbered_heading(text) \
+                and not SENTENCE_END_RE.search(text):
+            kind = "label"
+        else:
+            kind = "other"
+        captions = len(getattr(item, "captions", []) or []) if kind == "picture" else 0
+        entries.append(LayoutEntry(kind, page_no, box, captions))
+    panel_groups: dict[int, tuple[list[int], list[int]]] = {}
+    absorbed: set[int] = set()
+    for pics, labels in find_panel_groups(entries):
+        panel_groups[pics[0]] = (pics, labels)
+        absorbed.update(pics[1:])
+        absorbed.update(labels)
+
+    for idx, item in enumerate(items):
+        if idx in absorbed:
+            continue
         label = getattr(item, "label", None)
         ref = getattr(item, "self_ref", "")
         if ref in caption_refs:
@@ -285,25 +485,30 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
             stats.tables += 1
             caption = item.caption_text(doc).strip()
             md = table_to_markdown(item, doc)
-            if caption:
-                blocks.append(caption)
-            if md:
-                blocks.append(md)
+            for part in (caption, md):
+                if part:
+                    float_blocks.add(len(blocks))
+                    blocks.append(part)
         elif label in picture_labels:
-            stats.figures += 1
-            caption = item.caption_text(doc).strip()
+            group = panel_groups.get(idx)
+            members = [items[i] for i in group[0]] if group else [item]
+            stats.figures += len(members)
+            caption = next((c for c in (m.caption_text(doc).strip() for m in members) if c), "")
+            panel_titles = [(getattr(items[i], "text", "") or "").strip() for i in group[1]] if group else []
             image = None
             if enrich:
-                try:
-                    image = item.get_image(doc)
-                except Exception:
-                    image = None
+                image = _figure_image(doc, members, [entries[i] for i in group[0] + group[1]] if group else [])
+            if group:
+                stats.merged_panels += len(members) - 1
             if image is not None:
                 name = f"figure_{len(figures) + 1}.png"
-                figures.append(FigureAsset(name, caption, _png(image), image.width, image.height))
+                figures.append(FigureAsset(name, caption, _png(image), image.width, image.height,
+                                           panel_titles=panel_titles))
                 figure_slots[name] = len(blocks)
+                float_blocks.add(len(blocks))
                 blocks.append(name)
             elif caption:
+                float_blocks.add(len(blocks))
                 blocks.append(caption)
         elif label == DocItemLabel.FORMULA:
             stats.formulas += 1
@@ -321,6 +526,17 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
             blocks.append(f"{prefix} {text}")
         elif label in (DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER):
             continue
+        elif label == DocItemLabel.FOOTNOTE and text:
+            float_blocks.add(len(blocks))
+            blocks.append(text)
+        elif label in text_labels and text:
+            if (last_para is not None and all(i in float_blocks for i in range(last_para + 1, len(blocks)))
+                    and continues_paragraph(blocks[last_para], text)):
+                blocks[last_para] = blocks[last_para].rstrip() + " " + text
+                stats.joined_paragraphs += 1
+            else:
+                last_para = len(blocks)
+                blocks.append(text)
         elif text:
             blocks.append(text)
 

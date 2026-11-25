@@ -8,6 +8,13 @@ const STATUS_LABEL: Record<DocumentStatus, string> = {
   error: "Lỗi",
 };
 
+// meta can be `{}` when metadata extraction failed (e.g. an ingest error), so every field is optional here.
+function byline(meta: DocumentInfo["meta"]): string {
+  const authors = meta?.authors ?? [];
+  const names = authors.slice(0, 3).join(", ") + (authors.length > 3 ? " et al." : "");
+  return [names, meta?.year].filter(Boolean).join(" · ");
+}
+
 interface DocumentPanelProps {
   documents: DocumentInfo[];
   selected: string[];
@@ -112,13 +119,7 @@ export default function DocumentPanel({
                 {d.title}
               </span>
             </label>
-            {d.meta && (d.meta.authors.length > 0 || d.meta.year) && (
-              <div className="doc-byline">
-                {[d.meta.authors.slice(0, 3).join(", ") + (d.meta.authors.length > 3 ? " et al." : ""), d.meta.year]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </div>
-            )}
+            {byline(d.meta) && <div className="doc-byline">{byline(d.meta)}</div>}
             <div className="doc-meta">
               <span className={`badge ${d.status}`}>{STATUS_LABEL[d.status] ?? d.status}</span>
               {d.status === "ready" && (

@@ -4,7 +4,17 @@ docling_core = pytest.importorskip("docling_core")
 
 from docling_core.types.doc import DoclingDocument, TableCell, TableData
 
-from app.docling_pdf import JUNK_HEADING_RE, SCI_EXPONENT_RE, is_numbered_heading, norm_title, table_to_markdown
+from app.docling_pdf import (
+    JUNK_HEADING_RE,
+    SCI_EXPONENT_RE,
+    LayoutEntry,
+    clean_description,
+    continues_paragraph,
+    find_panel_groups,
+    is_numbered_heading,
+    norm_title,
+    table_to_markdown,
+)
 from app.hierarchy import build_chunks, embedding_text, parse_markdown, split_paragraphs
 
 
@@ -87,3 +97,51 @@ def test_numbered_heading_detection():
 def test_scientific_exponent_restored():
     assert SCI_EXPONENT_RE.sub(r"\g<1>10^\2", "| 2.3 · 1019 | 1.0 · 1020 |") == "| 2.3 · 10^19 | 1.0 · 10^20 |"
     assert SCI_EXPONENT_RE.sub(r"\g<1>10^\2", "| 1020 | 10 |") == "| 1020 | 10 |"
+
+
+def _nips_figure2_entries():
+    # Page 4 of "Attention Is All You Need" as Docling reports it (top-left origin, points): the left panel's
+    # title is a separate section_header, each panel is its own picture, only the right one has the caption.
+    return [
+        LayoutEntry("other", 3, (108, 703, 504, 723)),          # "...We compute the dot products of the"
+        LayoutEntry("label", 4, (148, 72, 266, 81)),            # "Scaled Dot-Product Attention" (panel title)
+        LayoutEntry("picture", 4, (174, 94, 240, 219)),         # left panel
+        LayoutEntry("picture", 4, (347, 71, 467, 238), captions=1),  # right panel
+        LayoutEntry("skip", 4, (108, 276, 504, 295)),           # "Figure 2: (left) ... (right) ..."
+        LayoutEntry("other", 4, (108, 314, 504, 341)),          # "query with all keys, ..."
+    ]
+
+
+def test_side_by_side_panels_form_one_figure_with_their_title():
+    assert find_panel_groups(_nips_figure2_entries()) == [([2, 3], [1])]
+
+
+def test_separately_captioned_pictures_stay_apart():
+    entries = _nips_figure2_entries()
+    entries[2].captions = 1
+    assert find_panel_groups(entries) == []
+
+
+def test_margin_heading_above_figure_is_not_absorbed():
+    entries = _nips_figure2_entries()
+    entries[1] = LayoutEntry("label", 4, (108, 72, 180, 81))  # a short heading at the left margin
+    assert find_panel_groups(entries) == [([2, 3], [])]
+
+
+def test_body_text_between_pictures_breaks_the_group():
+    entries = _nips_figure2_entries()
+    entries.insert(3, LayoutEntry("other", 4, (108, 230, 504, 260)))
+    assert find_panel_groups(entries) == []
+
+
+def test_paragraph_continuation_across_float():
+    assert continues_paragraph("We compute the dot products of the", "query with all keys, divide each by √dk.")
+    assert not continues_paragraph("This ends a sentence.", "lowercase start after a full stop")
+    assert not continues_paragraph("Các trường hợp sau đây", "a) Trường hợp thứ nhất")
+    assert not continues_paragraph("## 3.2 Attention", "query with all keys")
+    assert not continues_paragraph("An unfinished line", "Capitalised new paragraph")
+
+
+def test_description_markdown_headings_removed():
+    raw = "# Figure Description\n\nThis **diagram** shows\nthe attention pipeline."
+    assert clean_description(raw) == "This diagram shows the attention pipeline."
