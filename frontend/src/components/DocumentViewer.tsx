@@ -14,12 +14,6 @@ interface DocumentViewerProps {
   onUpdated: (doc: DocumentInfo) => void;
 }
 
-function nodeLabel(s: SectionNode): string {
-  const label = s.label ?? "";
-  if (s.kind === "clause" || s.kind === "point" || !s.title) return label;
-  return s.kind === "md" ? s.title : `${label}. ${s.title}`;
-}
-
 export default function DocumentViewer({ doc, isAdmin, onClose, onUpdated }: DocumentViewerProps) {
   const [tab, setTab] = useState<Tab>("tree");
   const [sections, setSections] = useState<SectionNode[]>([]);
@@ -96,7 +90,7 @@ export default function DocumentViewer({ doc, isAdmin, onClose, onUpdated }: Doc
                   className={`${active?.id === s.id ? "active" : ""} kind-${s.kind}`}
                   onClick={() => void openSection(s.id)}
                 >
-                  {nodeLabel(s)}
+                  {s.name}
                 </li>
               ))}
             </ul>

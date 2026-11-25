@@ -133,26 +133,69 @@ def embed_query(text: str) -> np.ndarray:
 
 
 def extract_json(text: str) -> str:
+    """Return the first complete JSON object in a model reply.
+
+    Models sometimes wrap the object in a code fence or add text (or a second object) after it, so slicing from the
+    first "{" to the last "}" is not enough: decode exactly one object and ignore whatever follows.
+    """
     text = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
-    if fenced:
-        return fenced.group(1)
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        return text[start : end + 1]
+    decoder = json.JSONDecoder()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    for candidate in ([fenced.group(1)] if fenced else []) + [text]:
+        start = candidate.find("{")
+        while start != -1:
+            try:
+                obj, _ = decoder.raw_decode(candidate, start)
+            except ValueError:
+                obj = None
+            if isinstance(obj, dict):
+                return json.dumps(obj, ensure_ascii=False)
+            start = candidate.find("{", start + 1)
     return "{}"
 
 
-def _bedrock_chat_json(system: str, user: str, temperature: float, model: str | None) -> str:
+# Newer Bedrock models (e.g. Claude Sonnet 5) reject `temperature` with a ValidationException. Models seen doing so
+# are remembered and called without it from then on.
+_NO_TEMPERATURE_MODELS: set[str] = set()
+
+
+def _rejects_temperature(exc: Exception) -> bool:
+    err = getattr(exc, "response", {}).get("Error", {}) if hasattr(exc, "response") else {}
+    return err.get("Code") == "ValidationException" and "temperature" in str(err.get("Message", "")).lower()
+
+
+def bedrock_converse(model: str, messages: list, max_tokens: int, temperature: float, system: list | None = None):
     from .aws import bedrock_runtime
 
+    def call(with_temperature: bool):
+        config: dict = {"maxTokens": max_tokens}
+        if with_temperature:
+            config["temperature"] = temperature
+        kwargs: dict = {"modelId": model, "messages": messages, "inferenceConfig": config}
+        if system:
+            kwargs["system"] = system
+        return with_network_retry(bedrock_runtime().converse, **kwargs)
+
+    if model in _NO_TEMPERATURE_MODELS:
+        return call(False)
+    try:
+        return call(True)
+    except Exception as exc:
+        if not _rejects_temperature(exc):
+            raise
+        _NO_TEMPERATURE_MODELS.add(model)
+        log.info("Model %s does not accept temperature; retrying without it", model)
+        return call(False)
+
+
+def _bedrock_chat_json(system: str, user: str, temperature: float, model: str | None) -> str:
     settings = get_settings()
-    resp = with_network_retry(
-        bedrock_runtime().converse,
-        modelId=model or settings.bedrock_llm_model,
+    resp = bedrock_converse(
+        model or settings.bedrock_llm_model,
+        [{"role": "user", "content": [{"text": user}]}],
+        settings.llm_max_tokens,
+        temperature,
         system=[{"text": system + JSON_ONLY_SUFFIX}],
-        messages=[{"role": "user", "content": [{"text": user}]}],
-        inferenceConfig={"maxTokens": settings.llm_max_tokens, "temperature": temperature},
     )
     parts = resp["output"]["message"]["content"]
     text = "".join(p.get("text", "") for p in parts)
@@ -179,16 +222,14 @@ def vision_text(prompt: str, png: bytes, max_tokens: int = 600) -> str:
     settings = get_settings()
     model = settings.vision_model or settings.active_llm_model
     if settings.llm_provider == "bedrock":
-        from .aws import bedrock_runtime
-
-        resp = with_network_retry(
-            bedrock_runtime().converse,
-            modelId=model,
-            messages=[{"role": "user", "content": [
+        resp = bedrock_converse(
+            model,
+            [{"role": "user", "content": [
                 {"image": {"format": "png", "source": {"bytes": png}}},
                 {"text": prompt},
             ]}],
-            inferenceConfig={"maxTokens": max_tokens, "temperature": 0.0},
+            max_tokens,
+            0.0,
         )
         return "".join(p.get("text", "") for p in resp["output"]["message"]["content"]).strip()
     import base64

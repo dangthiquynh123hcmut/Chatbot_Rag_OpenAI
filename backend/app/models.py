@@ -80,7 +80,6 @@ class Section(Base):
     ord: Mapped[int] = mapped_column(Integer, nullable=False)
     depth: Mapped[int] = mapped_column(Integer, nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
-    label: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text)
     path: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
     refs: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))

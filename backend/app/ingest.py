@@ -67,7 +67,6 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                     n.order,
                     n.depth,
                     n.kind,
-                    n.label if n.kind != "document" else PREAMBLE,
                     n.title,
                     n.path if n.kind != "document" else [PREAMBLE],
                     Jsonb(n.refs),
@@ -84,9 +83,9 @@ def process_document(doc_id: uuid.UUID, path: Path) -> None:
                 conn.execute("DELETE FROM sections WHERE document_id=%s", (doc_id,))
                 with conn.cursor() as cur:
                     cur.executemany(
-                        """INSERT INTO sections (id, document_id, parent_id, ord, depth, kind, label,
+                        """INSERT INTO sections (id, document_id, parent_id, ord, depth, kind,
                            title, path, refs, full_md)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         section_rows,
                     )
                     cur.executemany(

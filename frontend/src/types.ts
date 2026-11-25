@@ -53,7 +53,8 @@ export interface SectionNode {
   parent_id: string | null;
   depth: number;
   kind: SectionKind;
-  label: string | null;
+  /** Display name, e.g. "Article 5. Scope" (last element of the section's path). */
+  name: string;
   title: string | null;
   refs: Refs;
 }
@@ -63,7 +64,6 @@ export interface SectionDetail {
   document_id: string;
   document_title: string;
   kind: SectionKind;
-  label: string | null;
   title: string | null;
   path: string[];
   refs: Refs;
