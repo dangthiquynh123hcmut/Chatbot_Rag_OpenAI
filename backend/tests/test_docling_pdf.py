@@ -4,7 +4,7 @@ docling_core = pytest.importorskip("docling_core")
 
 from docling_core.types.doc import DoclingDocument, TableCell, TableData
 
-from app.docling_pdf import JUNK_HEADING_RE, norm_title, table_to_markdown
+from app.docling_pdf import JUNK_HEADING_RE, SCI_EXPONENT_RE, is_numbered_heading, norm_title, table_to_markdown
 from app.hierarchy import build_chunks, embedding_text, parse_markdown, split_paragraphs
 
 
@@ -73,3 +73,17 @@ def test_split_paragraphs_keeps_fence_with_blank_lines():
     text = "Para one.\n\n```\nalpha\n\nbeta\n```\n\nPara two."
     parts = split_paragraphs(text, 10_000, 0)
     assert parts == [text]
+
+
+def test_numbered_heading_detection():
+    assert is_numbered_heading("3.2.2 Multi-Head Attention")
+    assert is_numbered_heading("3.3 Position-wise Feed-Forward Networks")
+    assert is_numbered_heading("4 Why Self-Attention")
+    assert not is_numbered_heading("3 layers are stacked on top of each other.")
+    assert not is_numbered_heading("2017 Conference on Neural Information Processing Systems")
+    assert not is_numbered_heading("12 heads were used in the base model and the results are shown in Table 3 below for clarity")
+
+
+def test_scientific_exponent_restored():
+    assert SCI_EXPONENT_RE.sub(r"\g<1>10^\2", "| 2.3 · 1019 | 1.0 · 1020 |") == "| 2.3 · 10^19 | 1.0 · 10^20 |"
+    assert SCI_EXPONENT_RE.sub(r"\g<1>10^\2", "| 1020 | 10 |") == "| 1020 | 10 |"

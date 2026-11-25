@@ -10,6 +10,11 @@ interface MarkdownProps {
 }
 
 const FIGURE_RE = /^figure:\/\/([0-9a-f-]{36})\/(figure_\d{1,4}\.png)$/i;
+const DISPLAY_MATH_LINE_RE = /^[ \t]*\$\$[ \t]*(\S.*?)[ \t]*\$\$[ \t]*$/gm;
+
+function displayMathBlocks(md: string): string {
+  return md.replace(DISPLAY_MATH_LINE_RE, (_line, tex: string) => `$$\n${tex}\n$$`);
+}
 
 function urlTransform(url: string): string {
   return FIGURE_RE.test(url) ? url : defaultUrlTransform(url);
@@ -61,7 +66,7 @@ export default function Markdown({ children }: MarkdownProps) {
         urlTransform={urlTransform}
         components={components}
       >
-        {children ?? ""}
+        {displayMathBlocks(children ?? "")}
       </ReactMarkdown>
     </div>
   );

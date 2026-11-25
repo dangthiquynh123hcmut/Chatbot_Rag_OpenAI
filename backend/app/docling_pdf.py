@@ -21,6 +21,8 @@ JUNK_HEADING_RE = re.compile(
     re.IGNORECASE,
 )
 CODE_LIKE_RE = re.compile(r"[{};]|==|=>|::|\w\(\)")
+NUMBERED_HEADING_RE = re.compile(r"^\d{1,2}(\.\d{1,2}){0,4}\.?\s+[A-Z][^.!?]{1,90}$")
+SCI_EXPONENT_RE = re.compile(r"([·×]\s*)10(-?\d{1,3})\b")
 TOC_PREFIX_RE = re.compile(r"^(chapter\s+\d+|part\s+[ivxlc\d]+|appendix\s+[a-z\d]+|[ivxlc]+)\s+", re.IGNORECASE)
 
 FORMULA_PROMPT = (
@@ -141,7 +143,11 @@ def table_to_markdown(table, doc) -> str:
     lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * n_cols) + "|"]
     for row in rows[n_header:]:
         lines.append("| " + " | ".join(_cell(c.text if c is not None else "") for c in row) + " |")
-    return "\n".join(lines)
+    return SCI_EXPONENT_RE.sub(r"\g<1>10^\2", "\n".join(lines))
+
+
+def is_numbered_heading(text: str) -> bool:
+    return bool(NUMBERED_HEADING_RE.match(text)) and len(text.split()) <= 12
 
 
 def _png(image) -> bytes:
@@ -227,6 +233,8 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
     blocks: list[str] = []
     figures: list[FigureAsset] = []
     figure_slots: dict[str, int] = {}
+    seen_headings: set[str] = set()
+    title_seen = False
 
     for item, _level in doc.iterate_items():
         label = getattr(item, "label", None)
@@ -235,6 +243,23 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
             continue
         text = (getattr(item, "text", "") or "").strip()
 
+        if label == DocItemLabel.TEXT and is_numbered_heading(text):
+            label = DocItemLabel.SECTION_HEADER
+        if label == DocItemLabel.TITLE:
+            title_seen = True
+        elif label == DocItemLabel.SECTION_HEADER and not title_seen:
+            title_seen = True
+            prov = getattr(item, "prov", None) or []
+            if prov and prov[0].page_no == 1 and not is_numbered_heading(text) and norm_title(text) != "abstract":
+                label = DocItemLabel.TITLE
+        if label in (DocItemLabel.TITLE, DocItemLabel.SECTION_HEADER) and text:
+            key = re.sub(r"^[\d ]+", "", norm_title(text))
+            numbered = is_numbered_heading(text)
+            if label == DocItemLabel.SECTION_HEADER and not numbered and key in seen_headings:
+                stats.junk_headings += 1
+                continue
+            if label == DocItemLabel.TITLE or numbered:
+                seen_headings.add(key)
         if label == DocItemLabel.TITLE:
             blocks.append(f"# {text}")
         elif label == DocItemLabel.SECTION_HEADER:
