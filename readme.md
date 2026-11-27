@@ -21,6 +21,7 @@ Câu hỏi ──► Nhận diện số hiệu (Điều 3, Khoản 2, Mục 1.2�
 ```
 
 ### 1. Chuyển sang Markdown (`backend/app/converters.py`, `backend/app/docling_pdf.py`)
+Cả PDF và DOCX đều chuyển bằng **Docling**, không có bộ chuyển dự phòng: Docling chưa cài hoặc chuyển lỗi thì tài liệu được đánh dấu `error` kèm thông báo lỗi.
 - **PDF: [Docling](https://github.com/docling-project/docling)** (mô hình nhận dạng bố cục + TableFormer), chạy offline với model đóng gói sẵn trong image (`DOCLING_ARTIFACTS_PATH`, `HF_HUB_OFFLINE=1`):
 
   | Phần tử | Xử lý |
@@ -32,8 +33,8 @@ Câu hỏi ──► Nhận diện số hiệu (Điều 3, Khoản 2, Mục 1.2�
   | Công thức | Cắt ảnh vùng công thức → Claude vision chép thành LaTeX `$$ … $$` (`FORMULA_VLM`); tắt thì giữ chữ gốc. Model công thức của Docling không dùng vì quá chậm trên CPU (~100 giây/công thức) |
   | Code | Khối ` ``` ` giữ nguyên thụt lề |
 
-  Docling lỗi hoặc chưa cài → tự lùi về `pymupdf4llm` (`PDF_PARSER=pymupdf` để dùng hẳn). Tốc độ trên CPU khoảng 2 giây/trang (không tính gọi Claude vision).
-- DOCX: `mammoth` → HTML → `markdownify` (giữ Heading, bảng, danh sách tự đánh số của Word), rồi chuẩn hóa: bỏ số trang, ghép dòng bị ngắt giữa câu, bỏ gạch nối cuối dòng.
+  Tốc độ trên CPU khoảng 2 giây/trang (không tính gọi Claude vision).
+- **DOCX: Docling** đọc thẳng cấu trúc file Word (không chạy model bố cục/TableFormer nên nhanh): cấp tiêu đề lấy theo style `Heading N` (`Title` → `#`, `Heading 1` → `##`…), danh sách tự đánh số của Word giữ số (`1.`, `2.`…), bảng kể cả ô gộp, công thức Word chuyển thẳng sang LaTeX, hình lưu và mô tả giống PDF, header/footer bị loại.
 - Chunker không bao giờ cắt đôi khối code, công thức, hình; bảng dài được tách theo nhóm dòng và **lặp lại dòng tiêu đề** ở mỗi phần.
 
 ### 2. Chunking Hierarchy-Aware (`backend/app/hierarchy.py`)
@@ -75,8 +76,12 @@ python -m venv venv
 venv\Scripts\Activate
 ```
 ```powershell
+pip install -r backend\requirements-docling.txt
+```
+```powershell
 pip install -r backend\requirements.txt
 ```
+`requirements-docling.txt` cài PyTorch CPU + Docling – bắt buộc vì mọi PDF/DOCX đều chuyển bằng Docling. Chạy local không đặt `DOCLING_ARTIFACTS_PATH` thì Docling tự tải model từ HuggingFace ở lần chạy đầu.
 ```powershell
 cd backend; uvicorn app.main:app --reload --port 8000
 ```
@@ -405,7 +410,7 @@ docker compose --profile full up -d backend
 Image backend khoảng 5–6 GB vì chứa PyTorch CPU và model Docling (~700 MB, đã bỏ model công thức).
 
 ## PDF scan (ví dụ `data/TT_HCM.pdf`)
-File scan không có lớp text nên cần OCR. Cài thêm `pip install rapidocr onnxruntime` (hoặc Tesseract kèm gói ngôn ngữ `vie`) rồi bật `ENABLE_OCR=true`. Nếu không có OCR, tài liệu sẽ báo lỗi rõ ràng thay vì nạp nội dung rỗng. Với văn bản tiếng Việt có dấu, Tesseract `vie` thường cho kết quả tốt hơn.
+File scan không có lớp text nên cần OCR. Docling OCR bằng RapidOCR (`rapidocr`, `onnxruntime` đã có trong `requirements-docling.txt`) khi `ENABLE_OCR=true`. Nếu tắt OCR, tài liệu sẽ báo lỗi rõ ràng thay vì nạp nội dung rỗng.
 
 ## Cấu hình (`.env`)
 

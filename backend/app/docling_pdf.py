@@ -44,7 +44,7 @@ SENTENCE_END_RE = re.compile(r"[.!?:;…)\]\"'”’]$")
 ENUM_START_RE = re.compile(r"^([a-zđ]|[ivx]{1,4}|\d{1,3})[).]\s", re.IGNORECASE)
 MD_HEADING_LINE_RE = re.compile(r"^\s*#{1,6}\s")
 
-_converters: dict[bool, object] = {}
+_converters: dict[object, object] = {}
 _converter_lock = threading.Lock()
 _convert_lock = threading.Lock()
 
@@ -198,6 +198,17 @@ def _get_converter(do_ocr: bool):
         converter = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
         _converters[do_ocr] = converter
         return converter
+
+
+def _get_docx_converter():
+    # DOCX already carries its structure: Docling reads it directly, no layout/table models involved
+    with _converter_lock:
+        if "docx" not in _converters:
+            from docling.datamodel.base_models import InputFormat
+            from docling.document_converter import DocumentConverter
+
+            _converters["docx"] = DocumentConverter(allowed_formats=[InputFormat.DOCX])
+        return _converters["docx"]
 
 
 def norm_title(text: str) -> str:
@@ -377,16 +388,20 @@ def _describe_figures(figures: list[FigureAsset], stats: ConversionStats) -> Non
     stats.described_figures = sum(1 for f in chosen if f.description)
 
 
-def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) -> tuple[str, ConversionStats]:
+def convert_document(path: Path, doc_key: str | None = None, do_ocr: bool = False) -> tuple[str, ConversionStats]:
+    """Convert a PDF or DOCX to Markdown. PDF-only repairs (TOC levels, running-header dedupe, paragraphs cut by
+    page breaks, formula crops) are skipped for DOCX, whose heading levels and paragraphs are exact."""
     from docling_core.types.doc import DocItemLabel
 
+    is_pdf = path.suffix.lower() == ".pdf"
     stats = ConversionStats()
     picture_labels = {DocItemLabel.PICTURE, getattr(DocItemLabel, "CHART", DocItemLabel.PICTURE)}
+    converter = _get_converter(do_ocr) if is_pdf else _get_docx_converter()
     with _convert_lock:
-        result = _get_converter(do_ocr).convert(str(path))
+        result = converter.convert(str(path))
     doc = result.document
 
-    toc = read_toc(path)
+    toc = read_toc(path) if is_pdf else []
     toc_by_title: dict[str, tuple[int, str]] = {}
     for level, title, _ in toc:
         toc_by_title.setdefault(norm_title(title), (level, title))
@@ -455,7 +470,7 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
         if label in (DocItemLabel.TITLE, DocItemLabel.SECTION_HEADER) and text:
             key = re.sub(r"^[\d ]+", "", norm_title(text))
             numbered = is_numbered_heading(text)
-            if label == DocItemLabel.SECTION_HEADER and not numbered and key in seen_headings:
+            if is_pdf and label == DocItemLabel.SECTION_HEADER and not numbered and key in seen_headings:
                 stats.junk_headings += 1
                 continue
             if label == DocItemLabel.TITLE or numbered:
@@ -478,6 +493,9 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
                 stats.toc_matched += 1
                 last_toc_level, title = match
                 blocks.append("#" * min(last_toc_level + 1, 6) + " " + title)
+            elif not is_pdf:
+                # Word "Heading N" style → N+1 hashes (# is the document title)
+                blocks.append("#" * min((getattr(item, "level", 1) or 1) + 1, 6) + " " + text)
             else:
                 level = min(last_toc_level + 2, 6) if toc_by_title else 2
                 blocks.append("#" * level + " " + text)
@@ -512,7 +530,8 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
                 blocks.append(caption)
         elif label == DocItemLabel.FORMULA:
             stats.formulas += 1
-            latex = _formula_latex(item, doc, stats) if enrich else re.sub(r"\s+", " ", text)
+            # DOCX equations arrive as LaTeX already; only PDF formulas need the vision transcription
+            latex = _formula_latex(item, doc, stats) if enrich and is_pdf else re.sub(r"\s+", " ", text)
             if latex:
                 blocks.append(f"$$ {latex} $$")
         elif label == DocItemLabel.CODE:
@@ -530,7 +549,8 @@ def convert_pdf(path: Path, doc_key: str | None = None, do_ocr: bool = False) ->
             float_blocks.add(len(blocks))
             blocks.append(text)
         elif label in text_labels and text:
-            if (last_para is not None and all(i in float_blocks for i in range(last_para + 1, len(blocks)))
+            if (is_pdf and last_para is not None
+                    and all(i in float_blocks for i in range(last_para + 1, len(blocks)))
                     and continues_paragraph(blocks[last_para], text)):
                 blocks[last_para] = blocks[last_para].rstrip() + " " + text
                 stats.joined_paragraphs += 1

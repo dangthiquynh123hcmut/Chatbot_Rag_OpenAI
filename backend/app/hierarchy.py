@@ -309,6 +309,19 @@ class HierarchyParser:
             cur = cur.parent
         return False
 
+    def _list_escapes_heading(self, cand: Candidate, parent: Node) -> bool:
+        """True when an unmarked item that starts a new sequence ("1." / "a)") would land above a Markdown heading
+        still open on the stack, e.g. a list right after "## 11.4 RAG" or "## Methods". Such an item is a list
+        inside that section: a real heading at that level would itself be marked by the converter."""
+        if cand.marked:
+            return False
+        for n in reversed(self.stack):
+            if n is parent:
+                return False
+            if n.md_level is not None:
+                return True
+        return False
+
     def _accept(self, cand: Candidate, parent: Node) -> bool:
         if cand.kind == "article":
             v = number_value(cand.number)
@@ -333,11 +346,11 @@ class HierarchyParser:
                 if parent.kind in ("num", "clause") and parent.number != prefix:
                     return False
             if prev is None:
-                return last == 1
+                return last == 1 and not self._list_escapes_heading(cand, parent)
             return last == int(prev.number.split(".")[-1]) + 1
         if cand.kind == "point":
             if prev is None:
-                return cand.number == "a"
+                return cand.number == "a" and not self._list_escapes_heading(cand, parent)
             return is_successor("point", prev.number, cand.number)
         return True
 

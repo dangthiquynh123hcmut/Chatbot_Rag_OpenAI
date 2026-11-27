@@ -137,3 +137,46 @@ def test_vietnamese_keywords_not_structural():
     root = parse_markdown("Chương I\nĐiều 1. Phạm vi\n1. Một\n2. Hai", "x")
     assert all(n.kind not in ("chapter", "article") for n in root.iter())
     assert parse_references("Khoản 2 Điều 3") == {}
+
+
+def _kinds(root):
+    return [(n.depth, n.kind, n.display()) for n in list(root.iter())[1:]]
+
+
+def test_list_after_decimal_heading_stays_in_section():
+    md = (
+        "## 11.1 Information Retrieval\nText.\n\n"
+        "## 11.2 Retrieval-Augmented Generation\nThe steps are:\n\n"
+        "1. Call a retriever to return the top-k passages\n\n"
+        "2. Create a prompt that includes q\n\n"
+        "3. Call an LLM with the prompt\n\n"
+        "After the list.\n\n"
+        "## 11.3 Summary\nEnd."
+    )
+    root = parse_markdown(md, "Ch")
+    assert _kinds(root) == [
+        (1, "num", "11.1. Information Retrieval"),
+        (1, "num", "11.2. Retrieval-Augmented Generation"),
+        (1, "num", "11.3. Summary"),
+    ]
+    sec = root.children[1]
+    assert "2. Create a prompt" in sec.own_text and "After the list." in sec.own_text
+    assert [c.node.display() for c in build_chunks(root)].count("11.2. Retrieval-Augmented Generation") == 1
+
+
+def test_list_and_points_after_md_heading_stay_in_section():
+    md = "## Methods\nWe do:\n\n1. Collect data\n\n2. Train model\n\na) first\n\nb) second\n\n### Details\nMore."
+    root = parse_markdown(md, "T")
+    assert _kinds(root) == [(1, "md", "Methods"), (2, "md", "Details")]
+    assert "2. Train model" in root.children[0].own_text
+
+
+def test_numbered_headings_still_continue_under_marked_subsection():
+    # "2. Methods" continues the plain-text sequence started by "1. Introduction", so it may close "## 1.1".
+    root = parse_markdown("1. Introduction\nA.\n\n## 1.1 Background\nB.\n\n2. Methods\nC.", "T")
+    assert _kinds(root) == [(1, "num", "1. Introduction"), (2, "num", "1.1. Background"), (1, "num", "2. Methods")]
+
+
+def test_clauses_under_marked_article_unchanged():
+    root = parse_markdown("## Article 2. Subjects\n1. Domestic agencies.\n2. Foreign organizations:\na) case one;\nb) case two.", "L")
+    assert [n.kind for n in list(root.iter())[1:]] == ["article", "clause", "clause", "point", "point"]

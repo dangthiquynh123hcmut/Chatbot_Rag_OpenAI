@@ -50,7 +50,6 @@ class Settings(BaseSettings):
     upload_dir: Path = BACKEND_DIR / "storage" / "uploads"
     markdown_dir: Path = BACKEND_DIR / "storage" / "markdown"
     enable_ocr: bool = True
-    ocr_language: str = "eng"
 
     cors_origins: str = "http://localhost:5173"
 
@@ -65,7 +64,6 @@ class Settings(BaseSettings):
 
     metadata_llm: bool = True
 
-    pdf_parser: str = "docling"
     docling_artifacts_path: str = ""
     docling_table_mode: str = "fast"
     docling_threads: int = 8

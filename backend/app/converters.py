@@ -31,74 +31,26 @@ def _scan_check(path: Path) -> bool:
     return scanned
 
 
-def pymupdf_to_markdown(path: Path, scanned: bool) -> str:
-    import pymupdf
-    import pymupdf4llm
+def _docling_to_markdown(path: Path, doc_key: str | None, do_ocr: bool = False) -> str:
+    from . import docling_pdf
 
-    settings = get_settings()
-    with pymupdf.open(path) as doc:
-        try:
-            md = pymupdf4llm.to_markdown(
-                doc,
-                header=False,
-                footer=False,
-                use_ocr=settings.enable_ocr,
-                force_ocr=scanned,
-                ocr_language=settings.ocr_language,
-                show_progress=False,
-            )
-        except Exception as exc:
-            raise ConversionError(f"Lỗi chuyển PDF sang Markdown: {exc}") from exc
-    if scanned and len(md.strip()) < 50:
-        raise ConversionError(
-            "PDF là bản scan nhưng OCR không trích được nội dung. "
-            "Cài `pip install rapidocr onnxruntime` hoặc Tesseract kèm gói ngôn ngữ 'eng'."
-        )
-    return normalize_markdown(md)
+    if not docling_pdf.available():
+        raise ConversionError("Chưa cài Docling: chạy `pip install -r requirements-docling.txt`.")
+    try:
+        md, stats = docling_pdf.convert_document(path, doc_key, do_ocr=do_ocr)
+    except Exception as exc:
+        log.exception("Docling conversion failed for %s", path.name)
+        raise ConversionError(f"Docling không chuyển được {path.name}: {exc}") from exc
+    log.info("Docling %s: %s", path.name, stats)
+    return light_normalize(md)
 
 
 def pdf_to_markdown(path: Path, doc_key: str | None = None) -> str:
-    from . import docling_pdf
-
-    scanned = _scan_check(path)
-    if get_settings().pdf_parser.lower() == "docling":
-        if docling_pdf.available():
-            try:
-                md, stats = docling_pdf.convert_pdf(path, doc_key, do_ocr=scanned)
-                log.info("Docling %s: %s", path.name, stats)
-                return light_normalize(md)
-            except Exception:
-                log.exception("Docling conversion failed for %s, falling back to pymupdf4llm", path.name)
-        else:
-            log.warning("PDF_PARSER=docling nhưng chưa cài docling, dùng pymupdf4llm")
-    return pymupdf_to_markdown(path, scanned)
+    return _docling_to_markdown(path, doc_key, do_ocr=_scan_check(path))
 
 
-def docx_to_markdown(path: Path) -> str:
-    import mammoth
-    from markdownify import markdownify
-
-    style_map = "\n".join(
-        [
-            "p[style-name='Title'] => h1:fresh",
-            "p[style-name='Heading 1'] => h1:fresh",
-            "p[style-name='Heading 2'] => h2:fresh",
-            "p[style-name='Heading 3'] => h3:fresh",
-            "p[style-name='Heading 4'] => h4:fresh",
-            "p[style-name='Heading 5'] => h5:fresh",
-            "p[style-name='Heading 6'] => h6:fresh",
-        ]
-    )
-    try:
-        with open(path, "rb") as f:
-            result = mammoth.convert_to_html(
-                f,
-                style_map=style_map,
-                convert_image=mammoth.images.img_element(lambda _: {"src": ""}),
-            )
-    except Exception as exc:
-        raise ConversionError(f"Lỗi đọc DOCX: {exc}") from exc
-    return markdownify(result.value, heading_style="ATX", bullets="-", strip=["img", "a"])
+def docx_to_markdown(path: Path, doc_key: str | None = None) -> str:
+    return _docling_to_markdown(path, doc_key)
 
 
 TERMINAL = tuple(".:;!?…)\"”»]")
@@ -163,7 +115,7 @@ def convert_to_markdown(path: Path, doc_key: str | None = None) -> str:
     if ext == ".pdf":
         md = pdf_to_markdown(path, doc_key)
     elif ext == ".docx":
-        md = normalize_markdown(docx_to_markdown(path))
+        md = docx_to_markdown(path, doc_key)
     else:
         raise ConversionError(f"Định dạng {ext} chưa được hỗ trợ (chỉ PDF, DOCX).")
     if not md.strip():
