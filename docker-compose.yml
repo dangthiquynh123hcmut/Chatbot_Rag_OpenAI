@@ -31,8 +31,31 @@ services:
         condition: service_healthy
     profiles: ["full"]
 
+  test:
+    build: ./backend
+    image: chatbot_rag_openai-backend
+    env_file: .env
+    environment:
+      ENABLE_OCR: "false"
+      TEST_DATABASE_URL: ${TEST_DATABASE_URL:-}
+      PIP_ROOT_USER_ACTION: ignore
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./backend/requirements-dev.txt:/app/requirements-dev.txt:ro
+      - pip-cache:/root/.cache/pip
+    entrypoint:
+      - sh
+      - -c
+      - pip install -q -r requirements-dev.txt && exec python -m pytest -q -p no:cacheprovider "$$@"
+      - pytest
+    command: ["tests"]
+    profiles: ["test"]
+
 volumes:
   pgdata:
+  pip-cache:
 
 networks:
   default:

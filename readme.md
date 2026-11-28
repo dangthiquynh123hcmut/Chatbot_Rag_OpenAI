@@ -161,16 +161,21 @@ alembic upgrade head --sql
 ```
 
 ### Test
+Chạy trong Docker bằng service `test` (profile `test`, chạy từ thư mục gốc). Service dùng lại image backend, mount `backend/app` và `backend/tests` nên luôn test code hiện tại mà không cần build lại image; pytest được cài từ `requirements-dev.txt` khi chạy, có cache trong volume `pip-cache`:
 ```powershell
-cd backend; pip install -r requirements-dev.txt; python -m pytest -q tests
+docker compose --profile test run --rm test
+```
+Chạy một file hoặc truyền thêm tham số pytest:
+```powershell
+docker compose --profile test run --rm test tests/test_audit.py -v
 ```
 Test luồng đăng nhập và CRUD qua ORM (`tests/test_auth_flow.py`, `tests/test_orm_crud.py`) cần một PostgreSQL **dùng để thử, có thể xóa**. Nếu không đặt `TEST_DATABASE_URL` thì các test này tự bỏ qua:
 ```powershell
-$env:TEST_DATABASE_URL="postgresql://rag:rag@localhost:5432/rag_test"; python -m pytest -q tests
+$env:TEST_DATABASE_URL="postgresql://rag:rag@db:5432/rag_test"; docker compose --profile test run --rm test
 ```
-Trên máy Windows bị Application Control chặn thư viện native (`pydantic_core`, `psycopg`…), chạy test trong container:
+Chạy trực tiếp trên máy (chỉ khi Windows không chặn thư viện native như `pydantic_core`, `psycopg`):
 ```powershell
-docker compose --profile full run --rm --no-deps -v ${PWD}/backend/tests:/app/tests -e ENABLE_OCR=false backend sh -c "pip install -q pytest==9.2.0 && python -m pytest -q tests"
+cd backend; pip install -r requirements-dev.txt; python -m pytest -q tests
 ```
 
 ## Audit chất lượng nạp tài liệu & embedding
@@ -213,6 +218,7 @@ cd backend; python -m app.cli eval-generate ..\data --out ..\eval\datasets\v1.js
 - Lấy mẫu các mục **không chồng lấn nhau** (không chọn cả mục cha lẫn mục con), phân tầng theo loại (Điểm, Khoản, Điều, mục số…).
 - 4 loại câu hỏi: `reference` (sinh theo mẫu từ số hiệu, ví dụ "Điểm b khoản 2 Điều 3 quy định gì?"), `semantic` (diễn đạt lại, không lặp từ khóa), `factoid` (con số, thời hạn, ô trong bảng), `unanswerable` (cùng chủ đề nhưng tài liệu không có).
 - Câu hỏi viết đúng ngôn ngữ của tài liệu; đoạn trích (`gold_quote`) phải khớp nguyên văn tài liệu, đáp án chuẩn (`gold_path`) được thu hẹp tới mục sâu nhất chứa đoạn trích; câu trùng và câu chép nguyên văn bị loại.
+- **Lọc bằng critique LLM**: mỗi câu `semantic`/`factoid` được chấm 1–5 theo `groundedness` (mục trả lời rõ ràng, một đáp án), `standalone` (hiểu được mà không cần xem mục, không chung chung tới mức khớp tài liệu khác) và `relevance` (người dùng thật có hỏi không). Chỉ giữ câu đạt ≥ `--min-score` (mặc định 4) ở cả ba tiêu chí; điểm lưu trong trường `critique`. Vì khoảng một nửa số câu có thể bị loại, nên tăng `--per-section` (ví dụ 4). Tắt bằng `--no-critique`.
 - Đáp án chuẩn lưu theo **đường dẫn mục**, không theo UUID, nên vẫn dùng được sau khi nạp lại tài liệu.
 - **Bắt buộc người duyệt**: LLM có thể sinh câu "không có trong tài liệu" nhưng thực ra có. Sửa/xóa câu chưa đạt, đặt `"reviewed": true`, rồi chạy với `--reviewed-only`.
 

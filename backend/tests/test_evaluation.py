@@ -160,3 +160,40 @@ def test_generation_helpers(docs):
     ids = {id(n) for n in picked}
     for n in picked:
         assert not ({id(a) for a in n.ancestors()} & ids)
+
+
+def test_critique_filters_generated_questions(docs, monkeypatch):
+    from app.cli.evaluation import generate as gen
+
+    def fake_judge(system, user, temperature=0.0):
+        if system == gen.QUESTION_SYSTEM:
+            body = user.split("SECTION CONTENT:\n", 1)[1]
+            line = next(ln for ln in body.splitlines() if ln.strip() and not ln.startswith("#"))
+            return json.dumps({"questions": [
+                {"type": "factoid", "question": "Who supervises survey work under the construction decree?",
+                 "answer": "The project owner.", "quote": line},
+                {"type": "semantic", "question": "What does this section say?", "answer": "Something.", "quote": line},
+            ]})
+        if system == gen.CRITIQUE_SYSTEM:
+            vague = "this section" in user.split("Question: ", 1)[1]
+            rating = lambda r: {"evaluation": "ok", "rating": r}
+            return json.dumps({"groundedness": rating(5), "standalone": rating(1 if vague else 5), "relevance": rating(4)})
+        return json.dumps({"questions": []})
+
+    monkeypatch.setattr(gen, "judge_chat_json", fake_judge)
+    items = generate_dataset(docs, sections_per_doc=3, questions_per_section=2, unanswerable_per_doc=0)
+    llm_items = [i for i in items if i.type in ("semantic", "factoid")]
+    assert llm_items and all("this section" not in i.question for i in llm_items)
+    assert all(i.critique == {"groundedness": 5, "standalone": 5, "relevance": 4} for i in llm_items)
+
+    unfiltered = generate_dataset(docs, sections_per_doc=3, questions_per_section=2, unanswerable_per_doc=0, critique=False)
+    assert any("this section" in i.question for i in unfiltered)
+
+
+def test_passes_critique_threshold():
+    from app.cli.evaluation.generate import _rating, passes_critique
+
+    assert passes_critique({"groundedness": 4, "standalone": 5, "relevance": 4}, 4)
+    assert not passes_critique({"groundedness": 4, "standalone": 3, "relevance": 5}, 4)
+    assert passes_critique(None, 4)
+    assert _rating({"rating": "5"}) == 5 and _rating(7) is None and _rating("x") is None

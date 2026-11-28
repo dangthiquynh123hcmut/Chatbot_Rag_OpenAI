@@ -17,6 +17,7 @@ class EvalItem:
     gold_quote: str = ""
     reference_answer: str = ""
     section_kind: str = ""
+    critique: dict[str, int] = field(default_factory=dict)
     reviewed: bool = False
     notes: str = ""
 

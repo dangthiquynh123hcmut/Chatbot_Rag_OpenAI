@@ -348,8 +348,10 @@ def audit_file(path: Path) -> AuditReport:
 
 def write_reports(reports: list[AuditReport], json_path: str | None, md_path: str | None) -> None:
     if json_path:
+        Path(json_path).parent.mkdir(parents=True, exist_ok=True)
         Path(json_path).write_text(json.dumps([r.to_dict() for r in reports], ensure_ascii=False, indent=2),
                                    encoding="utf-8")
     if md_path:
+        Path(md_path).parent.mkdir(parents=True, exist_ok=True)
         body = "# Báo cáo audit tài liệu\n\n" + "\n".join(r.to_markdown() for r in reports)
         Path(md_path).write_text(body, encoding="utf-8")

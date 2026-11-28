@@ -33,7 +33,21 @@ Given the document title and its list of sections, create plausible English ques
 that the document certainly does NOT answer (e.g. about penalties, figures, countries or dates it does not mention).
 Return JSON: {"questions": ["...", "..."]}"""
 
-KIND_PRIORITY = {"point": 0, "clause": 1, "article": 2, "num": 3, "roman": 4, "md": 5, "subsection": 6, "section": 7}
+CRITIQUE_SYSTEM = """You review generated evaluation questions for a document lookup (RAG) system that searches a whole collection of documents.
+Given the document title, the SECTION the question was generated from, the question and its answer, rate the question on three criteria, each an integer 1..5:
+- "groundedness": can the question be answered clearly and unambiguously from the SECTION alone?
+  1 = the section does not answer it; 3 = partly answered or several readings are possible; 5 = the section answers it fully with a single correct answer.
+- "standalone": is the question understandable and specific without seeing the section?
+  1 = it refers to "this section", "the document", "the above" or similar, or is so generic it would match many unrelated documents in the collection;
+  3 = understandable but missing a key qualifier (subject, document type, scope); 5 = fully self-contained and specific.
+- "relevance": would a real user of this document plausibly ask it?
+  1 = trivial, artificial or about formatting; 3 = plausible but marginal; 5 = a natural, useful question.
+For each criterion write the evaluation BEFORE the rating.
+Return JSON: {"groundedness": {"evaluation": "...", "rating": 5}, "standalone": {"evaluation": "...", "rating": 5}, "relevance": {"evaluation": "...", "rating": 5}}"""
+
+CRITERIA = ("groundedness", "standalone", "relevance")
+
+KIND_PRIORITY ={"point": 0, "clause": 1, "article": 2, "num": 3, "roman": 4, "md": 5, "subsection": 6, "section": 7}
 
 
 def _slug(name: str) -> str:
@@ -137,6 +151,37 @@ def _llm_questions(title: str, node: Node, per_section: int) -> list[dict]:
     return out
 
 
+def _rating(value) -> int | None:
+    if isinstance(value, dict):
+        value = value.get("rating")
+    try:
+        r = int(value)
+    except (TypeError, ValueError):
+        return None
+    return r if 1 <= r <= 5 else None
+
+
+def critique_question(title: str, node: Node, question: str, answer: str) -> dict[str, int] | None:
+    user = (
+        f"Document: {title}\nLocation: {' > '.join(node.path)}\n\nSECTION CONTENT:\n{node.full_markdown()}\n\n"
+        f"Question: {question}\nAnswer: {answer or '(none)'}"
+    )
+    try:
+        data = json.loads(judge_chat_json(CRITIQUE_SYSTEM, user))
+    except Exception as exc:
+        log.warning("Critique failed for %r: %s", question, exc)
+        return None
+    scores = {c: _rating(data.get(c)) for c in CRITERIA}
+    if any(v is None for v in scores.values()):
+        log.warning("Critique returned incomplete scores for %r: %s", question, data)
+        return None
+    return scores
+
+
+def passes_critique(scores: dict[str, int] | None, min_score: int) -> bool:
+    return scores is None or all(scores.get(c, 0) >= min_score for c in CRITERIA)
+
+
 def _unanswerable(title: str, root: Node, n: int) -> list[str]:
     if n <= 0:
         return []
@@ -157,6 +202,8 @@ def generate_dataset(
     unanswerable_per_doc: int = 5,
     seed: int = 7,
     use_llm: bool = True,
+    critique: bool = True,
+    min_score: int = 4,
 ) -> list[EvalItem]:
     settings = get_settings()
     rng = random.Random(seed)
@@ -166,6 +213,7 @@ def generate_dataset(
         slug = _slug(path.name)
         picked = _stratified_sample(_candidate_sections(root), sections_per_doc, rng)
         counter = 0
+        rejected = 0
         seen_questions: set[str] = set()
 
         def add(**kw) -> None:
@@ -185,12 +233,20 @@ def generate_dataset(
         if use_llm:
             with ThreadPoolExecutor(max_workers=settings.bedrock_max_workers) as pool:
                 results = list(pool.map(lambda n: _llm_questions(title, n, questions_per_section), picked))
-            for node, qs in zip(picked, results):
-                for q in qs:
-                    gold = refine_gold(node, q["quote"])
-                    add(question=q["question"], type=q["type"], gold_path=gold.path, gold_refs=gold.refs,
-                        gold_quote=q["quote"], reference_answer=q["answer"], section_kind=gold.kind)
+                pairs = [(node, q) for node, qs in zip(picked, results) for q in qs]
+                if critique:
+                    scores = list(pool.map(lambda p: critique_question(title, p[0], p[1]["question"], p[1]["answer"]), pairs))
+                else:
+                    scores = [None] * len(pairs)
+            for (node, q), sc in zip(pairs, scores):
+                if not passes_critique(sc, min_score):
+                    rejected += 1
+                    log.info("Drop question below critique threshold %s: %s", sc, q["question"])
+                    continue
+                gold = refine_gold(node, q["quote"])
+                add(question=q["question"], type=q["type"], gold_path=gold.path, gold_refs=gold.refs,
+                    gold_quote=q["quote"], reference_answer=q["answer"], section_kind=gold.kind, critique=sc or {})
             for q in _unanswerable(title, root, unanswerable_per_doc):
                 add(question=q, type="unanswerable", answerable=False)
-        log.info("%s: %d sections sampled, %d items", path.name, len(picked), counter)
+        log.info("%s: %d sections sampled, %d items, %d rejected by critique", path.name, len(picked), counter, rejected)
     return items

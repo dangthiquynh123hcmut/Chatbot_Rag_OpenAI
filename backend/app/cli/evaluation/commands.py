@@ -14,7 +14,7 @@ def cmd_eval_generate(args: argparse.Namespace) -> None:
     from .generate import generate_dataset
 
     items = generate_dataset(Path(args.docs), args.sections, args.per_section, args.unanswerable, args.seed,
-                             use_llm=not args.no_llm)
+                             use_llm=not args.no_llm, critique=not args.no_critique, min_score=args.min_score)
     save_dataset(items, args.out)
     print(f"Đã tạo {len(items)} câu hỏi → {args.out}")
     print("Theo loại: " + ", ".join(f"{k}={v}" for k, v in Counter(i.type for i in items).items()))
@@ -63,6 +63,10 @@ def register(sub) -> None:
     p.add_argument("--unanswerable", type=int, default=5, help="Unanswerable questions per document")
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--no-llm", action="store_true", help="Only template reference questions, no LLM calls")
+    p.add_argument("--no-critique", action="store_true",
+                   help="Skip the LLM critique filter (groundedness/standalone/relevance)")
+    p.add_argument("--min-score", type=int, default=4, choices=range(1, 6),
+                   help="Minimum 1-5 critique score required on every criterion")
     p.set_defaults(func=cmd_eval_generate)
     p = sub.add_parser("eval-run", help="Run retrieval and/or end-to-end evaluation")
     p.add_argument("dataset")
