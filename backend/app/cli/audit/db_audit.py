@@ -6,12 +6,12 @@ import uuid
 
 import numpy as np
 
-from .audit import AuditReport, Check, _squash, _status, chunk_within
-from .config import get_settings
-from .core.context import SessionFactory
-from .repositories.chunk_repository import ChunkRepository
-from .repositories.document_repository import DocumentRepository
-from .repositories.section_repository import SectionRepository
+from .file_audit import AuditReport, Check, _squash, _status, chunk_within
+from ...config import get_settings
+from ...core.context import SessionFactory
+from ...repositories.chunk_repository import ChunkRepository
+from ...repositories.document_repository import DocumentRepository
+from ...repositories.section_repository import SectionRepository
 
 
 def _documents(session_factory: SessionFactory, doc_id: uuid.UUID | None) -> list[dict]:
@@ -76,7 +76,7 @@ def check_vectors(rows: list[dict]) -> list[Check]:
 
 
 def check_self_retrieval(session_factory: SessionFactory, doc_id: uuid.UUID, sample: int, seed: int = 42) -> Check:
-    from .llm import embed_query
+    from ...llm import embed_query
 
     with session_factory() as session:
         sections = SectionRepository(session).titled_sections(doc_id)

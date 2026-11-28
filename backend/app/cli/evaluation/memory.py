@@ -11,14 +11,14 @@ from pathlib import Path
 
 import numpy as np
 
-from ..candidates import Candidate, keyword_terms
-from ..config import get_settings
-from ..converters import SUPPORTED_EXTENSIONS, convert_to_markdown
-from ..doc_resolver import CatalogEntry
-from ..hierarchy import PREAMBLE, Node, build_chunks, embedding_text, parse_markdown, tree_to_markdown
-from ..metadata import DocMeta, find_identifiers, pdf_info
-from ..llm import embed_texts
-from ..references import STRONG_KEYS, ref_variants
+from ...candidates import Candidate, keyword_terms
+from ...config import get_settings
+from ...converters import SUPPORTED_EXTENSIONS, convert_to_markdown
+from ...doc_resolver import CatalogEntry
+from ...hierarchy import PREAMBLE, Node, build_chunks, embedding_text, parse_markdown, tree_to_markdown
+from ...metadata import DocMeta, find_identifiers, pdf_info
+from ...llm import embed_texts
+from ...references import STRONG_KEYS, ref_variants
 
 log = logging.getLogger(__name__)
 BM25_K1, BM25_B = 1.5, 0.75

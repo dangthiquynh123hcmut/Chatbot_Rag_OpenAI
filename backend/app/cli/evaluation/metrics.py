@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from typing import Sequence
 
-from ..hierarchy import nfc
+from ...hierarchy import nfc
 
 
 def _norm_label(s: str) -> str:

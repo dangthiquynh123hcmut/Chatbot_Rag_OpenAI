@@ -7,12 +7,12 @@ import pytest
 from docx import Document
 
 from app import llm, rag
-from app.evaluation import memory as mem
-from app.evaluation import metrics as M
-from app.evaluation import runner
-from app.evaluation.dataset import EvalItem, load_dataset, save_dataset
-from app.evaluation.generate import generate_dataset, reference_question
-from app.evaluation.report import evaluate_thresholds, write_report
+from app.cli.evaluation import memory as mem
+from app.cli.evaluation import metrics as M
+from app.cli.evaluation import runner
+from app.cli.evaluation.dataset import EvalItem, load_dataset, save_dataset
+from app.cli.evaluation.generate import generate_dataset, reference_question
+from app.cli.evaluation.report import evaluate_thresholds, write_report
 
 
 def _fake_vec(text: str) -> np.ndarray:
@@ -150,7 +150,7 @@ def test_judge_falls_back_when_model_unavailable(monkeypatch):
 def test_generation_helpers(docs):
     import random
 
-    from app.evaluation.generate import _candidate_sections, _stratified_sample, refine_gold
+    from app.cli.evaluation.generate import _candidate_sections, _stratified_sample, refine_gold
 
     _, root = mem.load_document(docs / "decree.docx")
     article = next(n for n in root.iter() if n.kind == "article" and n.number == "2")

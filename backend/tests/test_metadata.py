@@ -10,7 +10,7 @@ from docx import Document
 from app import metadata as md
 from app import rag
 from app.doc_resolver import CatalogEntry, resolve_documents
-from app.evaluation import memory as mem
+from app.cli.evaluation import memory as mem
 from app.hierarchy import parse_markdown
 from app.metadata import DocMeta, clean_aliases, display_label, find_identifiers
 from app.references import parse_references

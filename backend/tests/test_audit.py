@@ -2,7 +2,7 @@ import unicodedata
 
 from docx import Document
 
-from app.audit import audit_file, check_text_quality, chunk_within
+from app.cli.audit.file_audit import audit_file, check_text_quality, chunk_within
 from app.converters import normalize_markdown
 from app.hierarchy import parse_markdown
 from app.references import parse_references

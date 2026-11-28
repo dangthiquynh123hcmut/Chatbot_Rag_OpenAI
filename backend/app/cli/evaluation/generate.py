@@ -8,10 +8,10 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from ..config import get_settings
-from ..hierarchy import INLINE_KINDS, Node
-from ..llm import judge_chat_json
-from ..rag import normalize_for_match, quote_in
+from ...config import get_settings
+from ...hierarchy import INLINE_KINDS, Node
+from ...llm import judge_chat_json
+from ...rag import normalize_for_match, quote_in
 from .dataset import EvalItem
 from .memory import list_documents, load_document
 

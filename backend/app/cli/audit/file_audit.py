@@ -9,9 +9,9 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .config import get_settings
-from .converters import convert_to_markdown
-from .hierarchy import INLINE_KINDS, KIND_LABELS, PREAMBLE, Node, build_chunks, classify_line, nfc, parse_markdown, tree_to_markdown
+from ...config import get_settings
+from ...converters import convert_to_markdown
+from ...hierarchy import INLINE_KINDS, KIND_LABELS, PREAMBLE, Node, build_chunks, classify_line, nfc, parse_markdown, tree_to_markdown
 
 STATUS_ORDER = {"pass": 0, "info": 1, "warn": 2, "fail": 3}
 
@@ -295,7 +295,7 @@ def check_chunks(root: Node, max_chars: int, overlap: int) -> Check:
 
 
 def check_toc(path: Path, root: Node) -> Check:
-    from .docling_pdf import norm_title, read_toc
+    from ...docling_pdf import norm_title, read_toc
 
     toc = read_toc(path) if path.suffix.lower() == ".pdf" else []
     if not toc:

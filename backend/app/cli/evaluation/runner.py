@@ -7,11 +7,11 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
-from ..candidates import Candidate, SearchBackend
-from ..config import get_settings
-from ..llm import effective_judge_model, judge_chat_json
-from ..rag import generate_answer, retrieve
-from ..references import parse_references
+from ...candidates import Candidate, SearchBackend
+from ...config import get_settings
+from ...llm import effective_judge_model, judge_chat_json
+from ...rag import generate_answer, retrieve
+from ...references import parse_references
 from . import metrics as M
 from .dataset import EvalItem
 

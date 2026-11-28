@@ -4,8 +4,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from ..config import get_settings
-from ..llm import effective_judge_model
+from ...config import get_settings
+from ...llm import effective_judge_model
 from .dataset import save_jsonl
 
 THRESHOLDS = {
